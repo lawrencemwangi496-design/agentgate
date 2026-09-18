@@ -3,7 +3,7 @@ use crate::auth::TokenStore;
 use crate::config::AgentGateConfig;
 use crate::policy::{Policy, PolicyRule, PolicyStore};
 use crate::server::cert;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use std::fs;
 use std::os::unix::process::CommandExt;
@@ -80,6 +80,22 @@ pub struct InitArgs {
     /// Default address to listen on (default: 127.0.0.1)
     #[arg(long)]
     pub listen: Option<String>,
+
+    /// Bind to 0.0.0.0 for network, external agents, browsers, and remote access
+    #[arg(long, aliases = ["public", "network"])]
+    pub remote: bool,
+
+    /// Bind to 127.0.0.1 for local machine CLI access only
+    #[arg(long)]
+    pub local: bool,
+
+    /// Bind to Tailscale IP if available
+    #[arg(long)]
+    pub tailscale: bool,
+
+    /// Run interactive configuration wizard
+    #[arg(long, short)]
+    pub interactive: bool,
 }
 
 #[derive(Args, Clone, Default)]
@@ -92,7 +108,19 @@ pub struct StartArgs {
     #[arg(long)]
     pub port: Option<u16>,
 
-    /// Run as plain HTTP without TLS
+    /// Bind to 0.0.0.0 for network, external agents, browsers, and remote access
+    #[arg(long, aliases = ["public", "network"])]
+    pub remote: bool,
+
+    /// Bind to 127.0.0.1 for local machine CLI access only
+    #[arg(long)]
+    pub local: bool,
+
+    /// Bind to Tailscale IP if available
+    #[arg(long)]
+    pub tailscale: bool,
+
+    /// Run as plain HTTP without TLS (useful for private Tailscale/LAN testing)
     #[arg(long, default_value_t = false)]
     pub no_tls: bool,
 }
@@ -107,6 +135,18 @@ pub struct ServeArgs {
     #[arg(long)]
     pub port: Option<u16>,
 
+    /// Bind to 0.0.0.0 for network, external agents, browsers, and remote access
+    #[arg(long, aliases = ["public", "network"])]
+    pub remote: bool,
+
+    /// Bind to 127.0.0.1 for local machine CLI access only
+    #[arg(long)]
+    pub local: bool,
+
+    /// Bind to Tailscale IP if available
+    #[arg(long)]
+    pub tailscale: bool,
+
     /// Optional path to custom TLS certificate (e.g. Let's Encrypt fullchain.pem)
     #[arg(long)]
     pub tls_cert: Option<std::path::PathBuf>,
@@ -115,7 +155,7 @@ pub struct ServeArgs {
     #[arg(long)]
     pub tls_key: Option<std::path::PathBuf>,
 
-    /// Run as plain HTTP without TLS
+    /// Run as plain HTTP without TLS (useful for private Tailscale/LAN testing)
     #[arg(long, default_value_t = false)]
     pub no_tls: bool,
 }
@@ -301,8 +341,112 @@ const STARTER_READ_ONLY: &str = include_str!("../../policies/read-only.yaml");
 const STARTER_DOCKER: &str = include_str!("../../policies/docker-ops.yaml");
 const STARTER_WEBSERVER: &str = include_str!("../../policies/webserver-ops.yaml");
 
+pub fn detect_network_addresses(port: u16, protocol: &str) -> Vec<(&'static str, String)> {
+    let mut addrs = Vec::new();
+    addrs.push(("Local", format!("{}://127.0.0.1:{}", protocol, port)));
+
+    if let Some(output) = std::process::Command::new("ip")
+        .args(["-brief", "-4", "addr"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+    {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let iface = parts[0];
+                let ip_cidr = parts[2];
+                let ip = ip_cidr.split('/').next().unwrap_or(ip_cidr);
+                if iface == "lo" || ip == "127.0.0.1" {
+                    continue;
+                }
+                if iface.starts_with("tailscale") {
+                    addrs.push(("Tailscale VPN", format!("{}://{}:{}", protocol, ip, port)));
+                } else {
+                    addrs.push(("LAN / Network", format!("{}://{}:{}", protocol, ip, port)));
+                }
+            }
+        }
+    }
+    addrs
+}
+
+pub fn get_tailscale_ip() -> Option<String> {
+    let output = std::process::Command::new("ip")
+        .args(["-brief", "-4", "addr"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3 && parts[0].starts_with("tailscale") {
+            let ip_cidr = parts[2];
+            return Some(ip_cidr.split('/').next().unwrap_or(ip_cidr).to_string());
+        }
+    }
+    None
+}
+
+fn prompt_interactive_init(_default_listen: &str, default_port: u16) -> Result<(String, u16)> {
+    use std::io::Write;
+
+    println!("==========================================================");
+    println!("             🚪 AgentGate Configuration Setup");
+    println!("==========================================================");
+    println!("Choose where AgentGate should accept connections from:");
+    println!("  1) Local only (127.0.0.1) [Recommended for local CLI agents on this PC]");
+    println!("  2) Network & Remote (0.0.0.0) [For web browsers, external agents & Tailscale]");
+    if let Some(ref tip) = get_tailscale_ip() {
+        println!(
+            "  3) Tailscale only ({}) [Private Tailscale VPN mesh only]",
+            tip
+        );
+    }
+    print!("\nSelect option [1-3, default 1]: ");
+    std::io::stdout().flush()?;
+    let mut choice = String::new();
+    std::io::stdin().read_line(&mut choice)?;
+    let choice = choice.trim();
+
+    let listen = match choice {
+        "2" => "0.0.0.0".to_string(),
+        "3" => get_tailscale_ip().unwrap_or_else(|| "127.0.0.1".to_string()),
+        _ => "127.0.0.1".to_string(),
+    };
+
+    print!("Port to listen on [default: {}]: ", default_port);
+    std::io::stdout().flush()?;
+    let mut port_str = String::new();
+    std::io::stdin().read_line(&mut port_str)?;
+    let port = port_str.trim().parse::<u16>().unwrap_or(default_port);
+
+    Ok((listen, port))
+}
+
 pub fn handle_init(args: InitArgs, config: &AgentGateConfig) -> Result<()> {
-    AgentGateConfig::init(args.port, args.listen)?;
+    use std::io::IsTerminal;
+
+    let (chosen_listen, chosen_port) = if args.remote {
+        ("0.0.0.0".to_string(), args.port.unwrap_or(7991))
+    } else if args.local {
+        ("127.0.0.1".to_string(), args.port.unwrap_or(7991))
+    } else if args.tailscale {
+        let tip = get_tailscale_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+        (tip, args.port.unwrap_or(7991))
+    } else if let Some(l) = args.listen {
+        (l, args.port.unwrap_or(7991))
+    } else if let Some(p) = args.port {
+        (config.listen_addr.clone(), p)
+    } else if args.interactive
+        || (std::io::stdin().is_terminal() && args.port.is_none() && args.listen.is_none())
+    {
+        prompt_interactive_init(&config.listen_addr, config.listen_port)?
+    } else {
+        (config.listen_addr.clone(), config.listen_port)
+    };
+
+    AgentGateConfig::init(Some(chosen_port), Some(chosen_listen))?;
 
     // Populate starter policies if they don't already exist
     let starters = [
@@ -322,8 +466,14 @@ pub fn handle_init(args: InitArgs, config: &AgentGateConfig) -> Result<()> {
 
     // Ensure self-signed TLS certificates
     cert::ensure_self_signed_cert(&config.tls_cert_path(), &config.tls_key_path())?;
-    println!("  ✓ Generated TLS certificate at: {}", config.tls_cert_path().display());
-    println!("  ✓ Generated TLS private key at: {}", config.tls_key_path().display());
+    println!(
+        "  ✓ Generated TLS certificate at: {}",
+        config.tls_cert_path().display()
+    );
+    println!(
+        "  ✓ Generated TLS private key at: {}",
+        config.tls_key_path().display()
+    );
 
     println!("\n✨ Setup complete! To start the daemon:");
     println!("  agentgate start\n");
@@ -360,8 +510,36 @@ pub fn get_process_port(pid: i32) -> Option<u16> {
         .and_then(|w| w[1].parse::<u16>().ok())
 }
 
+pub fn get_process_listen(pid: i32) -> Option<String> {
+    let cmdline_path = format!("/proc/{}/cmdline", pid);
+    let content = fs::read(cmdline_path).ok()?;
+    let args: Vec<String> = content
+        .split(|&b| b == 0)
+        .filter_map(|s| String::from_utf8(s.to_vec()).ok())
+        .collect();
+
+    args.windows(2)
+        .find(|w| w[0] == "--listen")
+        .map(|w| w[1].clone())
+}
+
 pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
-    let target_listen = args.listen.unwrap_or_else(|| config.listen_addr.clone());
+    let target_listen = if args.remote {
+        "0.0.0.0".to_string()
+    } else if args.local {
+        "127.0.0.1".to_string()
+    } else if args.tailscale {
+        if let Some(tip) = get_tailscale_ip() {
+            tip
+        } else {
+            bail!("No Tailscale interface detected on this machine. Is Tailscale running?");
+        }
+    } else if let Some(l) = args.listen {
+        l
+    } else {
+        config.listen_addr.clone()
+    };
+
     let target_port = args.port.unwrap_or(config.listen_port);
 
     if let Some(pid) = read_pid(&config.pid_file) {
@@ -379,7 +557,10 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
 
     if let Err(e) = std::net::TcpListener::bind(bind_addr) {
         if e.kind() == std::io::ErrorKind::AddrInUse {
-            eprintln!("❌ Port {} is already in use by another process on {}.", target_port, target_listen);
+            eprintln!(
+                "❌ Port {} is already in use by another process on {}.",
+                target_port, target_listen
+            );
             eprintln!("💡 You can choose a different port using:");
             eprintln!("   agentgate start --port <PORT>");
             eprintln!("   or set: export AGENTGATE_PORT=<PORT>");
@@ -430,7 +611,10 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
         let _ = fs::remove_file(&config.pid_file);
         let log_tail = fs::read_to_string(&log_file).unwrap_or_default();
         let last_lines: Vec<&str> = log_tail.lines().rev().take(6).collect();
-        eprintln!("❌ AgentGate daemon failed to start (exit status: {}).", status);
+        eprintln!(
+            "❌ AgentGate daemon failed to start (exit status: {}).",
+            status
+        );
         if !last_lines.is_empty() {
             eprintln!("   Error details from log ({}):", log_file.display());
             for line in last_lines.iter().rev() {
@@ -442,8 +626,33 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
 
     let protocol = if args.no_tls { "http" } else { "https" };
     println!("🟢 AgentGate daemon started in background (PID: {})", pid);
-    println!("   Listening on: {}://{}:{}", protocol, target_listen, target_port);
-    println!("   Daemon logs:  {}", log_file.display());
+    println!(
+        "   Listening on: {}://{}:{}",
+        protocol, target_listen, target_port
+    );
+
+    if target_listen == "0.0.0.0" {
+        let addrs = detect_network_addresses(target_port, protocol);
+        println!("\n🌐 Network Access URLs:");
+        for (label, url) in &addrs {
+            println!("   • {:14} {}", label, url);
+        }
+    }
+
+    println!("\n🖥️  Web Browser Console:");
+    println!(
+        "   Local:             {}://127.0.0.1:{}/",
+        protocol, target_port
+    );
+    if let Some(tip) =
+        get_tailscale_ip().filter(|tip| target_listen == "0.0.0.0" || &target_listen == tip)
+    {
+        println!(
+            "   Tailscale/Remote:  {}://{}:{}/",
+            protocol, tip, target_port
+        );
+    }
+    println!("\n   Daemon logs:  {}", log_file.display());
     println!("   Execute with: agentgate exec <command>");
     println!("   Stop anytime: agentgate stop");
 
@@ -490,7 +699,10 @@ pub fn handle_restart(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
 
 pub fn handle_status(args: StatusArgs, config: &AgentGateConfig) -> Result<()> {
     let pid_opt = read_pid(&config.pid_file);
-    let target_host = args.host.unwrap_or_else(|| config.listen_addr.clone());
+    let target_host = args
+        .host
+        .or_else(|| pid_opt.and_then(get_process_listen))
+        .unwrap_or_else(|| config.listen_addr.clone());
     let target_port = args
         .port
         .or_else(|| pid_opt.and_then(get_process_port))
@@ -505,7 +717,9 @@ pub fn handle_status(args: StatusArgs, config: &AgentGateConfig) -> Result<()> {
     } else {
         let addr = format!("{}:{}", target_host, target_port);
         let port_open = std::net::TcpStream::connect_timeout(
-            &addr.parse().unwrap_or_else(|_| "127.0.0.1:7991".parse().unwrap()),
+            &addr
+                .parse()
+                .unwrap_or_else(|_| "127.0.0.1:7991".parse().unwrap()),
             std::time::Duration::from_millis(500),
         )
         .is_ok();
@@ -520,10 +734,26 @@ pub fn handle_status(args: StatusArgs, config: &AgentGateConfig) -> Result<()> {
         }
     }
 
-    println!("Listening:     https://{}:{}", target_host, target_port);
+    let protocol = if args.tls { "https" } else { "http" };
+    println!(
+        "Listening:     {}://{}:{}",
+        protocol, target_host, target_port
+    );
+    println!("Web Console:   {}://127.0.0.1:{}/", protocol, target_port);
+    if target_host == "0.0.0.0" {
+        let addrs = detect_network_addresses(target_port, protocol);
+        for (label, url) in &addrs {
+            if label != &"Local" {
+                println!("  • {:12} {}", label, url);
+            }
+        }
+    }
     println!("Config Dir:    {}", config.config_dir.display());
     println!("PID File:      {}", config.pid_file.display());
-    println!("Daemon Log:    {}", config.logs_dir.join("daemon.log").display());
+    println!(
+        "Daemon Log:    {}",
+        config.logs_dir.join("daemon.log").display()
+    );
 
     let policy_store = PolicyStore::load(&config.policies_dir).ok();
     let policies_count = policy_store.map(|ps| ps.list().len()).unwrap_or(0);
@@ -535,11 +765,18 @@ pub fn handle_status(args: StatusArgs, config: &AgentGateConfig) -> Result<()> {
 
     if let Ok(Some(client_cfg)) = crate::client::load_client_config() {
         let masked = if client_cfg.token.len() > 10 {
-            format!("{}...{}", &client_cfg.token[..6], &client_cfg.token[client_cfg.token.len() - 4..])
+            format!(
+                "{}...{}",
+                &client_cfg.token[..6],
+                &client_cfg.token[client_cfg.token.len() - 4..]
+            )
         } else {
             "***".to_string()
         };
-        println!("Client CLI:    🟢 Configured ({}, {})", client_cfg.server, masked);
+        println!(
+            "Client CLI:    🟢 Configured ({}, {})",
+            client_cfg.server, masked
+        );
     } else {
         println!("Client CLI:    ⚪ Not logged in (run 'agentgate login')");
     }
@@ -583,7 +820,11 @@ pub fn handle_token(cmd: TokenSubcommand, config: &AgentGateConfig) -> Result<()
             let expires_display = match duration {
                 Some(d) => {
                     let expiry_time = chrono::Utc::now() + d;
-                    format!("{} (at {} UTC)", format_duration_human(d), expiry_time.format("%Y-%m-%d %H:%M"))
+                    format!(
+                        "{} (at {} UTC)",
+                        format_duration_human(d),
+                        expiry_time.format("%Y-%m-%d %H:%M")
+                    )
                 }
                 None => "Never (Permanent long-lasting token)".to_string(),
             };
@@ -613,7 +854,9 @@ pub fn handle_token(cmd: TokenSubcommand, config: &AgentGateConfig) -> Result<()
         TokenSubcommand::List => {
             let tokens = store.list();
             if tokens.is_empty() {
-                println!("No tokens found. Create one with: agentgate token create --name <name> --policy <policy>");
+                println!(
+                    "No tokens found. Create one with: agentgate token create --name <name> --policy <policy>"
+                );
                 return Ok(());
             }
 
@@ -637,7 +880,10 @@ pub fn handle_token(cmd: TokenSubcommand, config: &AgentGateConfig) -> Result<()
         }
         TokenSubcommand::Revoke { name } => {
             if store.revoke(&name)? {
-                println!("✓ Token '{}' has been revoked and can no longer be used.", name);
+                println!(
+                    "✓ Token '{}' has been revoked and can no longer be used.",
+                    name
+                );
             } else {
                 println!("Token '{}' not found.", name);
             }
@@ -802,9 +1048,17 @@ pub fn format_duration_human(d: chrono::Duration) -> String {
     } else if hours > 0 {
         format!("in {} hour{}", hours, if hours > 1 { "s" } else { "" })
     } else if minutes > 0 {
-        format!("in {} minute{}", minutes, if minutes > 1 { "s" } else { "" })
+        format!(
+            "in {} minute{}",
+            minutes,
+            if minutes > 1 { "s" } else { "" }
+        )
     } else {
-        format!("in {} second{}", seconds, if seconds > 1 { "s" } else { "" })
+        format!(
+            "in {} second{}",
+            seconds,
+            if seconds > 1 { "s" } else { "" }
+        )
     }
 }
 

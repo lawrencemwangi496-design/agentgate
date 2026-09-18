@@ -32,8 +32,8 @@ pub fn load_client_config() -> Result<Option<ClientConfig>> {
     if file_path.exists() {
         let content = fs::read_to_string(&file_path)
             .with_context(|| format!("Failed to read client config from {:?}", file_path))?;
-        let mut cfg: ClientConfig = serde_yaml::from_str(&content)
-            .with_context(|| "Failed to parse client config yaml")?;
+        let mut cfg: ClientConfig =
+            serde_yaml::from_str(&content).with_context(|| "Failed to parse client config yaml")?;
 
         // Env vars override file config if present
         if let Some(s) = env_server.as_deref().filter(|s| !s.trim().is_empty()) {
@@ -135,7 +135,10 @@ pub async fn handle_login(server: String, token_opt: Option<String>, insecure: b
             );
         }
         Err(e) => {
-            eprintln!("⚠️ Warning: Could not reach server at {}: {}", health_url, e);
+            eprintln!(
+                "⚠️ Warning: Could not reach server at {}: {}",
+                health_url, e
+            );
             eprintln!("   Saving credentials anyway so you can use them when the daemon starts.");
         }
     }
@@ -143,7 +146,11 @@ pub async fn handle_login(server: String, token_opt: Option<String>, insecure: b
     let saved_path = save_client_config(&clean_server, &raw_token, insecure)?;
 
     let masked_token = if raw_token.len() > 10 {
-        format!("{}...{}", &raw_token[..6], &raw_token[raw_token.len() - 4..])
+        format!(
+            "{}...{}",
+            &raw_token[..6],
+            &raw_token[raw_token.len() - 4..]
+        )
     } else {
         "***".to_string()
     };
@@ -168,7 +175,10 @@ pub fn handle_logout() -> Result<()> {
     if file_path.exists() {
         fs::remove_file(&file_path)
             .with_context(|| format!("Failed to delete client config at {:?}", file_path))?;
-        println!("🚪 Logged out. Removed client credentials from {}", file_path.display());
+        println!(
+            "🚪 Logged out. Removed client credentials from {}",
+            file_path.display()
+        );
     } else {
         println!("⚪ Not currently logged in (no client credentials file found).");
     }
@@ -187,7 +197,11 @@ pub async fn handle_whoami() -> Result<()> {
     };
 
     let masked_token = if cfg.token.len() > 10 {
-        format!("{}...{}", &cfg.token[..6], &cfg.token[cfg.token.len() - 4..])
+        format!(
+            "{}...{}",
+            &cfg.token[..6],
+            &cfg.token[cfg.token.len() - 4..]
+        )
     } else {
         "***".to_string()
     };
@@ -210,7 +224,10 @@ pub async fn handle_whoami() -> Result<()> {
             println!("Status:        🟢 Connected (Server Online)");
         }
         Ok(resp) => {
-            println!("Status:        ⚠️ Connected (Server returned {})", resp.status());
+            println!(
+                "Status:        ⚠️ Connected (Server returned {})",
+                resp.status()
+            );
         }
         Err(_) => {
             println!("Status:        🔴 Offline / Unreachable");
@@ -312,7 +329,10 @@ pub async fn handle_exec(
         Ok(r) => r,
         Err(e) => {
             if !quiet {
-                eprintln!("❌ Could not connect to AgentGate server at {}: {}", server_url, e);
+                eprintln!(
+                    "❌ Could not connect to AgentGate server at {}: {}",
+                    server_url, e
+                );
                 eprintln!("💡 Is the AgentGate daemon running? Start it with: agentgate start");
             }
             std::process::exit(1);
@@ -322,7 +342,10 @@ pub async fn handle_exec(
     let status = resp.status();
 
     if status.is_success() {
-        let text = resp.text().await.context("Failed to read server response body")?;
+        let text = resp
+            .text()
+            .await
+            .context("Failed to read server response body")?;
         if json_mode {
             println!("{}", text);
             return Ok(());
@@ -534,7 +557,10 @@ pub async fn handle_mcp() -> Result<()> {
             }
             "tools/call" => {
                 let params = parsed.get("params");
-                let tool_name = params.and_then(|p| p.get("name")).and_then(|n| n.as_str()).unwrap_or("");
+                let tool_name = params
+                    .and_then(|p| p.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
                 let cmd_str = params
                     .and_then(|p| p.get("arguments"))
                     .and_then(|a| a.get("command"))
@@ -554,7 +580,8 @@ pub async fn handle_mcp() -> Result<()> {
                     match api_resp {
                         Ok(res) if res.status().is_success() => {
                             let text = res.text().await.unwrap_or_default();
-                            let exec_res: Result<ServerExecResponse, _> = serde_json::from_str(&text);
+                            let exec_res: Result<ServerExecResponse, _> =
+                                serde_json::from_str(&text);
                             let content_text = match exec_res {
                                 Ok(er) => {
                                     if er.stderr.is_empty() {

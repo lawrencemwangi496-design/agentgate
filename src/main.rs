@@ -36,7 +36,19 @@ async fn main() -> Result<()> {
             cli::handle_restart(args, &config)?;
         }
         Commands::Serve(args) => {
-            let listen_addr = args.listen.unwrap_or(config.listen_addr.clone());
+            let listen_addr = if args.remote {
+                "0.0.0.0".to_string()
+            } else if args.local {
+                "127.0.0.1".to_string()
+            } else if args.tailscale {
+                if let Some(tip) = cli::get_tailscale_ip() {
+                    tip
+                } else {
+                    anyhow::bail!("No Tailscale interface detected on this machine.");
+                }
+            } else {
+                args.listen.unwrap_or(config.listen_addr.clone())
+            };
             let listen_port = args.port.unwrap_or(config.listen_port);
             config.listen_addr = listen_addr;
             config.listen_port = listen_port;
@@ -60,7 +72,14 @@ async fn main() -> Result<()> {
             cli::handle_status(args, &config)?;
         }
         Commands::Exec(args) => {
-            agentgate::client::handle_exec(args.command, args.server, args.token, args.json, args.quiet).await?;
+            agentgate::client::handle_exec(
+                args.command,
+                args.server,
+                args.token,
+                args.json,
+                args.quiet,
+            )
+            .await?;
         }
         Commands::Login(args) => {
             agentgate::client::handle_login(args.server, args.token, args.insecure).await?;

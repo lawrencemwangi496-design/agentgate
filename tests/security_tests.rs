@@ -123,19 +123,46 @@ fn test_duration_parsing_flexibility() {
     assert_eq!(parse_duration("0").unwrap(), None);
 
     // Hours
-    assert_eq!(parse_duration("2h").unwrap(), Some(chrono::Duration::hours(2)));
-    assert_eq!(parse_duration("4 hours").unwrap(), Some(chrono::Duration::hours(4)));
-    assert_eq!(parse_duration("12 hr").unwrap(), Some(chrono::Duration::hours(12)));
+    assert_eq!(
+        parse_duration("2h").unwrap(),
+        Some(chrono::Duration::hours(2))
+    );
+    assert_eq!(
+        parse_duration("4 hours").unwrap(),
+        Some(chrono::Duration::hours(4))
+    );
+    assert_eq!(
+        parse_duration("12 hr").unwrap(),
+        Some(chrono::Duration::hours(12))
+    );
 
     // Days
-    assert_eq!(parse_duration("1d").unwrap(), Some(chrono::Duration::days(1)));
-    assert_eq!(parse_duration("7 days").unwrap(), Some(chrono::Duration::days(7)));
-    assert_eq!(parse_duration("30 days").unwrap(), Some(chrono::Duration::days(30)));
+    assert_eq!(
+        parse_duration("1d").unwrap(),
+        Some(chrono::Duration::days(1))
+    );
+    assert_eq!(
+        parse_duration("7 days").unwrap(),
+        Some(chrono::Duration::days(7))
+    );
+    assert_eq!(
+        parse_duration("30 days").unwrap(),
+        Some(chrono::Duration::days(30))
+    );
 
     // Long lasting
-    assert_eq!(parse_duration("6 months").unwrap(), Some(chrono::Duration::days(180)));
-    assert_eq!(parse_duration("1 year").unwrap(), Some(chrono::Duration::days(365)));
-    assert_eq!(parse_duration("365d").unwrap(), Some(chrono::Duration::days(365)));
+    assert_eq!(
+        parse_duration("6 months").unwrap(),
+        Some(chrono::Duration::days(180))
+    );
+    assert_eq!(
+        parse_duration("1 year").unwrap(),
+        Some(chrono::Duration::days(365))
+    );
+    assert_eq!(
+        parse_duration("365d").unwrap(),
+        Some(chrono::Duration::days(365))
+    );
 
     // Invalid units
     assert!(parse_duration("invalid").is_err());
@@ -165,7 +192,8 @@ fn test_client_config_serialization() {
 #[test]
 fn test_port_binding_and_conflict_detection() {
     // Bind a listener on an ephemeral port
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
     let port = listener.local_addr().unwrap().port();
 
     // Attempting to bind the same port should immediately return AddrInUse
@@ -175,4 +203,3 @@ fn test_port_binding_and_conflict_detection() {
         assert_eq!(e.kind(), std::io::ErrorKind::AddrInUse);
     }
 }
-

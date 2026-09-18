@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentGate Console</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚪</text></svg>">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card: #151d30;
+      --card-border: #22304d;
+      --input-bg: #0c1220;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --primary: #38bdf8;
+      --primary-hover: #0ea5e9;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.5;
+    }
+
+    header {
+      border-bottom: 1px solid var(--card-border);
+      background: rgba(21, 29, 48, 0.8);
+      backdrop-filter: blur(10px);
+      padding: 1rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+    }
+
+    .brand span.badge {
+      font-size: 0.75rem;
+      font-weight: 500;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--primary);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      padding: 0.2rem 0.6rem;
+      border-radius: 9999px;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      background: #1e293b;
+      border: 1px solid var(--card-border);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--warning);
+    }
+
+    .status-dot.online { background: var(--success); box-shadow: 0 0 10px var(--success); }
+    .status-dot.offline { background: var(--danger); box-shadow: 0 0 10px var(--danger); }
+
+    main {
+      max-width: 1050px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      flex: 1;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    }
+
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .form-row > * {
+      flex: 1;
+      min-width: 260px;
+    }
+
+    label {
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    input, select {
+      background: var(--input-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input:focus {
+      border-color: var(--primary);
+    }
+
+    input.mono {
+      font-family: var(--font-mono);
+    }
+
+    .btn {
+      background: var(--primary);
+      color: #04101e;
+      border: none;
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: background 0.2s, opacity 0.2s;
+    }
+
+    .btn:hover { background: var(--primary-hover); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-secondary {
+      background: #1e293b;
+      color: var(--text);
+      border: 1px solid var(--card-border);
+    }
+    .btn-secondary:hover { background: #334155; }
+
+    .quick-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+
+    .chip {
+      background: #1e293b;
+      border: 1px solid var(--card-border);
+      padding: 0.35rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-family: var(--font-mono);
+      color: var(--primary);
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+
+    .chip:hover {
+      background: #334155;
+    }
+
+    /* Terminal Output Window */
+    .terminal-window {
+      background: #070b13;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-top: 1rem;
+    }
+
+    .terminal-header {
+      background: #111726;
+      border-bottom: 1px solid var(--card-border);
+      padding: 0.6rem 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .window-dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    .dot.red { background: #ef4444; }
+    .dot.yellow { background: #f59e0b; }
+    .dot.green { background: #10b981; }
+
+    .meta-tags {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    .tag {
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+    }
+    .tag.success { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+    .tag.danger { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .tag.info { background: rgba(56, 189, 248, 0.2); color: #38bdf8; }
+
+    .terminal-body {
+      padding: 1.25rem;
+      min-height: 160px;
+      max-height: 480px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .stdout { color: #f8fafc; }
+    .stderr { color: #f87171; margin-top: 0.5rem; }
+    .empty-state { color: #475569; text-align: center; padding: 2.5rem 0; }
+
+    .code-box {
+      background: var(--input-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: #cbd5e1;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    footer {
+      border-top: 1px solid var(--card-border);
+      padding: 1.5rem;
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <span>🚪 AgentGate</span>
+      <span class="badge">Web Console</span>
+    </div>
+    <div class="status-badge">
+      <div id="statusDot" class="status-dot"></div>
+      <span id="statusText">Checking server...</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Authentication Config -->
+    <div class="card">
+      <div class="card-title">
+        <span>🔑 Authentication & Server</span>
+        <button id="clearTokenBtn" class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Clear Token</button>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="serverUrl">AgentGate Server URL</label>
+          <input type="text" id="serverUrl" class="mono" value="">
+        </div>
+        <div class="form-group">
+          <label for="authToken">Agent Bearer Token (starts with ag_)</label>
+          <input type="password" id="authToken" class="mono" placeholder="ag_9a8b7c6d5e4f...">
+        </div>
+      </div>
+    </div>
+
+    <!-- Command Execution Playground -->
+    <div class="card">
+      <div class="card-title">
+        <span>⚡ Command Execution Playground</span>
+        <span style="font-size: 0.8rem; font-weight: 400; color: var(--text-muted);">Scoped by Token Policy</span>
+      </div>
+
+      <div class="form-group">
+        <label for="commandInput">Command</label>
+        <div style="display: flex; gap: 0.75rem;">
+          <input type="text" id="commandInput" class="mono" placeholder="e.g. uptime" style="flex: 1;">
+          <button id="runBtn" class="btn">▶ Run</button>
+        </div>
+      </div>
+
+      <div>
+        <label>Quick Diagnostics:</label>
+        <div class="quick-chips">
+          <div class="chip" data-cmd="uptime">uptime</div>
+          <div class="chip" data-cmd="df -h">df -h</div>
+          <div class="chip" data-cmd="free -m">free -m</div>
+          <div class="chip" data-cmd="uname -a">uname -a</div>
+          <div class="chip" data-cmd="whoami">whoami</div>
+          <div class="chip" data-cmd="cat /etc/os-release">cat /etc/os-release</div>
+          <div class="chip" data-cmd="systemctl status nginx">systemctl status nginx</div>
+          <div class="chip" data-cmd="docker ps">docker ps</div>
+          <div class="chip" data-cmd="uptime; id" style="color: var(--danger);" title="Test injection blocking">⚠️ uptime; id</div>
+        </div>
+      </div>
+
+      <!-- Output Display -->
+      <div class="terminal-window">
+        <div class="terminal-header">
+          <div class="window-dots">
+            <div class="dot red"></div>
+            <div class="dot yellow"></div>
+            <div class="dot green"></div>
+          </div>
+          <div class="meta-tags">
+            <span id="exitCodeTag" class="tag info" style="display: none;">EXIT: 0</span>
+            <span id="durationTag" class="tag info" style="display: none;">0ms</span>
+          </div>
+        </div>
+        <div id="terminalBody" class="terminal-body">
+          <div class="empty-state">No command executed yet. Select a command or type above and click Run.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CLI & API Equivalent Reference -->
+    <div class="card">
+      <div class="card-title">
+        <span>💻 AI Agent Equivalent Commands</span>
+      </div>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+        Your AI agent can run this command directly using our lightweight CLI or standard HTTPS cURL:
+      </p>
+      <div class="form-group">
+        <label>AgentGate Client CLI (Recommended — 4 tokens, no curl overhead):</label>
+        <div id="cliPreview" class="code-box">agentgate exec uptime</div>
+      </div>
+      <div class="form-group">
+        <label>Raw cURL API:</label>
+        <div id="curlPreview" class="code-box">curl -k -X POST https://127.0.0.1:7991/v1/exec ...</div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <p>AgentGate &bull; Zero Shell Injection &bull; Deny-by-Default Policy Execution</p>
+  </footer>
+
+  <script>
+    // State initialization
+    const serverInput = document.getElementById('serverUrl');
+    const tokenInput = document.getElementById('authToken');
+    const commandInput = document.getElementById('commandInput');
+    const runBtn = document.getElementById('runBtn');
+    const terminalBody = document.getElementById('terminalBody');
+    const exitCodeTag = document.getElementById('exitCodeTag');
+    const durationTag = document.getElementById('durationTag');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const cliPreview = document.getElementById('cliPreview');
+    const curlPreview = document.getElementById('curlPreview');
+    const clearTokenBtn = document.getElementById('clearTokenBtn');
+
+    // Default server URL to current origin
+    serverInput.value = window.location.origin || 'https://127.0.0.1:7991';
+
+    // Restore saved token
+    const savedToken = localStorage.getItem('agentgate_token');
+    if (savedToken) {
+      tokenInput.value = savedToken;
+    }
+
+    // Save token on change
+    tokenInput.addEventListener('input', () => {
+      localStorage.setItem('agentgate_token', tokenInput.value.trim());
+      updatePreviews();
+    });
+
+    clearTokenBtn.addEventListener('click', () => {
+      tokenInput.value = '';
+      localStorage.removeItem('agentgate_token');
+      updatePreviews();
+    });
+
+    // Check health
+    async function checkHealth() {
+      const base = serverInput.value.trim().replace(/\/+$/, '');
+      try {
+        const res = await fetch(`${base}/health`, { method: 'GET' });
+        if (res.ok) {
+          const data = await res.json();
+          statusDot.className = 'status-dot online';
+          statusText.textContent = `Online (v${data.version || '0.1.0'})`;
+        } else {
+          statusDot.className = 'status-dot offline';
+          statusText.textContent = `Server Error (${res.status})`;
+        }
+      } catch (err) {
+        statusDot.className = 'status-dot offline';
+        statusText.textContent = 'Server Offline / Unreachable';
+      }
+    }
+
+    // Update previews
+    function updatePreviews() {
+      const cmd = commandInput.value.trim() || 'uptime';
+      const token = tokenInput.value.trim() || 'ag_YOUR_TOKEN';
+      const srv = serverInput.value.trim().replace(/\/+$/, '') || 'https://127.0.0.1:7991';
+
+      cliPreview.textContent = `agentgate exec ${cmd}`;
+      curlPreview.textContent = `curl -k -X POST ${srv}/v1/exec \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"command": "${cmd}"}'`;
+    }
+
+    // Quick chips
+    document.querySelectorAll('.chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        commandInput.value = chip.getAttribute('data-cmd');
+        updatePreviews();
+        executeCommand();
+      });
+    });
+
+    commandInput.addEventListener('input', updatePreviews);
+    commandInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        executeCommand();
+      }
+    });
+
+    // Run command
+    async function executeCommand() {
+      const cmd = commandInput.value.trim();
+      if (!cmd) return;
+
+      const token = tokenInput.value.trim();
+      if (!token) {
+        alert('Please enter an AgentGate Bearer token first.');
+        tokenInput.focus();
+        return;
+      }
+
+      const base = serverInput.value.trim().replace(/\/+$/, '');
+      runBtn.disabled = true;
+      runBtn.textContent = '⏳ Running...';
+
+      terminalBody.innerHTML = '<span style="color: #64748b;">Executing command safely via POSIX exec...</span>';
+      exitCodeTag.style.display = 'none';
+      durationTag.style.display = 'none';
+
+      const startTime = performance.now();
+
+      try {
+        const res = await fetch(`${base}/v1/exec`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ command: cmd })
+        });
+
+        const elapsed = Math.round(performance.now() - startTime);
+        durationTag.textContent = `${elapsed}ms`;
+        durationTag.style.display = 'inline-block';
+
+        const data = await res.json();
+
+        if (res.ok) {
+          exitCodeTag.textContent = `EXIT: ${data.exit_code}`;
+          exitCodeTag.className = data.exit_code === 0 ? 'tag success' : 'tag danger';
+          exitCodeTag.style.display = 'inline-block';
+
+          let outHtml = '';
+          if (data.stdout) {
+            outHtml += `<span class="stdout">${escapeHtml(data.stdout)}</span>`;
+          }
+          if (data.stderr) {
+            outHtml += `<span class="stderr">${escapeHtml(data.stderr)}</span>`;
+          }
+          if (!data.stdout && !data.stderr) {
+            outHtml = '<span style="color: #64748b;">(Command completed with empty output)</span>';
+          }
+          if (data.truncated) {
+            outHtml += '\n<span style="color: #f59e0b;">⚠️ Output was truncated to 5MB safety limit.</span>';
+          }
+
+          terminalBody.innerHTML = outHtml;
+        } else {
+          exitCodeTag.textContent = `HTTP ${res.status}`;
+          exitCodeTag.className = 'tag danger';
+          exitCodeTag.style.display = 'inline-block';
+
+          let errorMsg = data.message || data.error || JSON.stringify(data);
+          let title = res.status === 403 ? '❌ Policy Denied' : (res.status === 400 ? '🛡️ Shell Injection Blocked' : '⚠️ Request Error');
+
+          terminalBody.innerHTML = `<span style="color: #f87171; font-weight: 600;">${title}:</span>\n<span style="color: #cbd5e1;">${escapeHtml(errorMsg)}</span>`;
+        }
+      } catch (err) {
+        exitCodeTag.textContent = 'NETWORK ERROR';
+        exitCodeTag.className = 'tag danger';
+        exitCodeTag.style.display = 'inline-block';
+        terminalBody.innerHTML = `<span style="color: #f87171;">Connection Failed: ${escapeHtml(err.message)}</span>\n<span style="color: #94a3b8;">Make sure AgentGate is running and accepts connections. If using HTTPS with a self-signed cert, accept the certificate warning once in your browser.</span>`;
+      } finally {
+        runBtn.disabled = false;
+        runBtn.textContent = '▶ Run';
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    runBtn.addEventListener('click', executeCommand);
+
+    // Initial check & preview
+    checkHealth();
+    updatePreviews();
+    setInterval(checkHealth, 10000);
+  </script>
+</body>
+</html>

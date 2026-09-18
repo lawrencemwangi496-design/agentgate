@@ -7,11 +7,11 @@ use crate::executor::{self, ParsedCommand};
 use crate::policy::PolicyStore;
 use anyhow::{Context, Result};
 use axum::{
+    Json, Router,
     extract::State,
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use chrono::Utc;
@@ -75,6 +75,8 @@ pub async fn run_server(
         .allow_headers(Any);
 
     let app = Router::new()
+        .route("/", get(console_handler))
+        .route("/console", get(console_handler))
         .route("/health", get(health_handler))
         .route("/v1/health", get(health_handler))
         .route("/v1/exec", post(exec_handler))
@@ -93,7 +95,8 @@ pub async fn run_server(
         if e.kind() == std::io::ErrorKind::AddrInUse {
             anyhow::bail!(
                 "Port {} is already in use by another process on {}.\n💡 Change the port using: agentgate start --port <PORT>\n   or set: export AGENTGATE_PORT=<PORT>",
-                config.listen_port, config.listen_addr
+                config.listen_port,
+                config.listen_addr
             );
         } else {
             anyhow::bail!("Cannot bind to {}: {}", addr, e);
@@ -139,6 +142,10 @@ pub async fn run_server(
     }
 
     Ok(())
+}
+
+async fn console_handler() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!("../web/console.html"))
 }
 
 async fn health_handler() -> Json<HealthResponse> {

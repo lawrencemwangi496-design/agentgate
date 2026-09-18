@@ -38,7 +38,9 @@ impl AgentGateConfig {
         let mut listen_port = 7991u16;
 
         // 1. Read from config.yaml if present
-        if let Ok(Some(parsed)) = fs::read_to_string(&config_file).map(|c| serde_yaml::from_str::<DaemonConfigFile>(&c).ok()) {
+        if let Ok(Some(parsed)) = fs::read_to_string(&config_file)
+            .map(|c| serde_yaml::from_str::<DaemonConfigFile>(&c).ok())
+        {
             if let Some(l) = parsed.listen {
                 listen_addr = l;
             }
@@ -48,10 +50,17 @@ impl AgentGateConfig {
         }
 
         // 2. Override from environment variables if set
-        if let Some(env_listen) = std::env::var("AGENTGATE_LISTEN").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        if let Some(env_listen) = std::env::var("AGENTGATE_LISTEN")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
             listen_addr = env_listen;
         }
-        if let Some(p) = std::env::var("AGENTGATE_PORT").ok().and_then(|p| p.trim().parse::<u16>().ok()) {
+        if let Some(p) = std::env::var("AGENTGATE_PORT")
+            .ok()
+            .and_then(|p| p.trim().parse::<u16>().ok())
+        {
             listen_port = p;
         }
 
@@ -84,6 +93,7 @@ impl AgentGateConfig {
         if let Some(p) = initial_port {
             config.listen_port = p;
         }
+        let has_custom_listen = initial_listen.is_some();
         if let Some(l) = initial_listen {
             config.listen_addr = l;
         }
@@ -100,22 +110,40 @@ impl AgentGateConfig {
             );
             fs::write(&config.config_file, yaml_content)
                 .with_context(|| format!("Failed to write config file {:?}", config.config_file))?;
+        } else if initial_port.is_some() || has_custom_listen {
+            let yaml_content = format!(
+                "# AgentGate Daemon Configuration\n\
+                 # Address to bind to (use \"127.0.0.1\" for local machine, \"0.0.0.0\" for network access)\n\
+                 listen: \"{}\"\n\n\
+                 # Port to listen on (default: 7991). Change this if port 7991 is used by another service.\n\
+                 port: {}\n",
+                config.listen_addr, config.listen_port
+            );
+            fs::write(&config.config_file, yaml_content)
+                .with_context(|| format!("Failed to write config file {:?}", config.config_file))?;
         }
-        
-        info!("Initialized AgentGate configuration at {}", config.config_dir.display());
+
+        info!(
+            "Initialized AgentGate configuration at {}",
+            config.config_dir.display()
+        );
         info!("Created directory: {}", config.policies_dir.display());
         info!("Created directory: {}", config.certs_dir.display());
         info!("Created directory: {}", config.logs_dir.display());
         info!("Configuration file: {}", config.config_file.display());
         info!("Tokens file expected at: {}", config.tokens_file.display());
-        
+
         // Print user-friendly setup confirmation
-        println!("Initialized AgentGate configuration at {}", config.config_dir.display());
+        println!(
+            "Initialized AgentGate configuration at {}",
+            config.config_dir.display()
+        );
         println!("  - Config file: {}", config.config_file.display());
         println!("  - Policies:    {}", config.policies_dir.display());
         println!("  - Certs:       {}", config.certs_dir.display());
         println!("  - Logs:        {}", config.logs_dir.display());
         println!("  - Tokens:      {}", config.tokens_file.display());
+        println!("  - Listen Host: {}", config.listen_addr);
         println!("  - Listen Port: {}", config.listen_port);
 
         Ok(config)

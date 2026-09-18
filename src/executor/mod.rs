@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -52,7 +52,10 @@ impl ParsedCommand {
         // 1. Check for shell metacharacters & null bytes
         for &meta in SHELL_METACHARACTERS {
             if trimmed.contains(meta) {
-                bail!("command contains disallowed shell metacharacter: '{:?}'", meta);
+                bail!(
+                    "command contains disallowed shell metacharacter: '{:?}'",
+                    meta
+                );
             }
         }
 
@@ -71,7 +74,10 @@ impl ParsedCommand {
         for arg in &args {
             if arg == ".." || arg.starts_with("../") || arg.contains("/../") || arg.ends_with("/..")
             {
-                bail!("argument '{}' contains disallowed directory traversal ('..')", arg);
+                bail!(
+                    "argument '{}' contains disallowed directory traversal ('..')",
+                    arg
+                );
             }
         }
 
@@ -93,10 +99,7 @@ impl ParsedCommand {
 
         // If an absolute path is provided, it must reside in one of the trusted directories
         if path.is_absolute() {
-            let parent = path
-                .parent()
-                .and_then(|p| p.to_str())
-                .unwrap_or("");
+            let parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
             if !TRUSTED_PATHS.contains(&parent) {
                 bail!(
                     "binary path '{}' is outside trusted system directories ({:?})",
@@ -226,7 +229,12 @@ pub async fn execute(cmd: &ParsedCommand, timeout_secs: u64) -> Result<ExecResul
     let exec_future = async {
         let (status_res, (stdout_bytes, stdout_trunc), (stderr_bytes, stderr_trunc)) =
             tokio::join!(child.wait(), read_stdout, read_stderr);
-        (status_res, stdout_bytes, stderr_bytes, stdout_trunc || stderr_trunc)
+        (
+            status_res,
+            stdout_bytes,
+            stderr_bytes,
+            stdout_trunc || stderr_trunc,
+        )
     };
 
     let (status_res, stdout_bytes, stderr_bytes, was_truncated) =
@@ -234,7 +242,10 @@ pub async fn execute(cmd: &ParsedCommand, timeout_secs: u64) -> Result<ExecResul
             Ok(res) => res,
             Err(_) => {
                 let _ = child.kill().await;
-                bail!("command execution timed out after {} seconds (process killed)", timeout_secs);
+                bail!(
+                    "command execution timed out after {} seconds (process killed)",
+                    timeout_secs
+                );
             }
         };
 
