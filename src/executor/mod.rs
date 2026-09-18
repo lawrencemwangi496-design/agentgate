@@ -1,16 +1,30 @@
-use anyhow::{bail, Result};
-use std::time::Instant;
+use anyhow::{bail, Context, Result};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::{Duration, Instant};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
-use std::time::Duration;
+
+/// Shell metacharacters and control characters that indicate injection attempts
+const SHELL_METACHARACTERS: &[char] = &[
+    ';', '&', '|', '`', '$', '(', ')', '>', '<', '\n', '\r', '\0',
+];
+
+/// Maximum allowed output per stream (5 MB) to prevent RAM exhaustion / DoS
+pub const MAX_OUTPUT_BYTES: usize = 5 * 1024 * 1024;
+
+/// Trusted system directories for binary execution. Prevents PATH manipulation.
+const TRUSTED_PATHS: &[&str] = &["/usr/bin", "/usr/sbin", "/bin", "/sbin"];
 
 /// Result of parsing a command string
 #[derive(Debug, Clone)]
 pub struct ParsedCommand {
-    pub binary: String,      // e.g., "systemctl"
-    pub args: Vec<String>,   // e.g., ["restart", "nginx"]
+    pub binary: String,       // Base binary name (e.g. "systemctl")
+    pub binary_path: PathBuf, // Absolute resolved path in trusted directories
+    pub args: Vec<String>,    // Arguments parsed with quotes preserved
     #[allow(dead_code)]
-    pub raw: String,         // the original command string
+    pub raw: String,
 }
 
 /// Result of executing a command
@@ -20,65 +34,219 @@ pub struct ExecResult {
     pub stdout: String,
     pub stderr: String,
     pub duration_ms: u64,
+    pub truncated: bool,
 }
-
-/// Shell metacharacters that indicate injection attempts
-const SHELL_METACHARACTERS: &[char] = &[';', '&', '|', '`', '$', '(', ')', '>', '<', '\n', '\r'];
 
 impl ParsedCommand {
     /// Parse a command string into binary + args.
-    /// Returns Err if the string contains shell metacharacters.
-    /// Does NOT use a shell — splits on whitespace.
+    /// - Checks for shell metacharacters and null bytes
+    /// - Uses POSIX quote-aware splitting (handles "foo bar" correctly)
+    /// - Rejects directory traversal in arguments ('..')
+    /// - Resolves binary exclusively against trusted system directories
     pub fn parse(command: &str) -> Result<Self> {
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            bail!("command is empty");
+        }
+
+        // 1. Check for shell metacharacters & null bytes
         for &meta in SHELL_METACHARACTERS {
-            if command.contains(meta) {
-                bail!("command contains disallowed shell metacharacter: '{}'", meta);
+            if trimmed.contains(meta) {
+                bail!("command contains disallowed shell metacharacter: '{:?}'", meta);
             }
         }
 
-        let mut tokens = command.split_whitespace();
-        let binary = match tokens.next() {
-            Some(b) => b.to_string(),
-            None => bail!("command is empty"),
-        };
+        // 2. Quote-aware tokenization using shlex
+        let tokens = shlex::split(trimmed)
+            .ok_or_else(|| anyhow::anyhow!("command contains unclosed quotes or syntax error"))?;
 
-        let args: Vec<String> = tokens.map(|s| s.to_string()).collect();
+        if tokens.is_empty() {
+            bail!("command is empty after tokenization");
+        }
+
+        let raw_binary = &tokens[0];
+        let args = tokens[1..].to_vec();
+
+        // 3. Block directory traversal in arguments
+        for arg in &args {
+            if arg == ".." || arg.starts_with("../") || arg.contains("/../") || arg.ends_with("/..")
+            {
+                bail!("argument '{}' contains disallowed directory traversal ('..')", arg);
+            }
+        }
+
+        // 4. Resolve binary exclusively in trusted system directories
+        let (base_binary_name, binary_path) = Self::resolve_trusted_binary(raw_binary)?;
 
         Ok(Self {
-            binary,
+            binary: base_binary_name,
+            binary_path,
             args,
-            raw: command.to_string(),
+            raw: trimmed.to_string(),
         })
+    }
+
+    /// Resolve a binary name to an absolute path inside trusted system directories.
+    /// Refuses relative paths, user paths, or arbitrary directories.
+    fn resolve_trusted_binary(binary: &str) -> Result<(String, PathBuf)> {
+        let path = Path::new(binary);
+
+        // If an absolute path is provided, it must reside in one of the trusted directories
+        if path.is_absolute() {
+            let parent = path
+                .parent()
+                .and_then(|p| p.to_str())
+                .unwrap_or("");
+            if !TRUSTED_PATHS.contains(&parent) {
+                bail!(
+                    "binary path '{}' is outside trusted system directories ({:?})",
+                    binary,
+                    TRUSTED_PATHS
+                );
+            }
+            if !path.is_file() {
+                bail!("binary '{}' does not exist or is not a file", binary);
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .ok_or_else(|| anyhow::anyhow!("invalid binary filename"))?;
+            return Ok((file_name.to_string(), path.to_path_buf()));
+        }
+
+        // If binary contains relative path slashes (e.g. ./bin/foo), reject it
+        if binary.contains('/') {
+            bail!("relative binary path '{}' is not permitted", binary);
+        }
+
+        // Search exclusively in trusted system directories
+        for &dir in TRUSTED_PATHS {
+            let candidate = Path::new(dir).join(binary);
+            if candidate.is_file() {
+                return Ok((binary.to_string(), candidate));
+            }
+        }
+
+        bail!(
+            "binary '{}' not found in trusted system directories ({:?})",
+            binary,
+            TRUSTED_PATHS
+        );
     }
 }
 
-/// Execute a parsed command using tokio::process::Command (NOT via shell).
-/// - The binary is looked up via PATH
-/// - Arguments are passed as an array (never interpolated into a shell string)
-/// - Output is captured
-/// - Has a timeout
+/// Execute a parsed command with hardened security controls:
+/// - Executes the resolved binary directly without shell
+/// - Strips environment variables (env_clear) to prevent secret leakage
+/// - Injects minimal, sanitized standard environment
+/// - Enforces non-interactive stdin (Stdio::null)
+/// - Enforces strict output size limit (5MB) to prevent RAM exhaustion
+/// - Kills child process if execution timeout expires
 pub async fn execute(cmd: &ParsedCommand, timeout_secs: u64) -> Result<ExecResult> {
     let start = Instant::now();
 
-    let mut child = Command::new(&cmd.binary);
-    child.args(&cmd.args);
+    // Determine current safe user and home for environment
+    let current_user = std::env::var("USER").unwrap_or_else(|_| "agentgate".to_string());
+    let current_home = dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/tmp".to_string());
 
-    let future = child.output();
-    let output = match timeout(Duration::from_secs(timeout_secs), future).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => bail!("failed to execute process: {}", e),
-        Err(_) => bail!("command execution timed out after {} seconds", timeout_secs),
+    let mut builder = Command::new(&cmd.binary_path);
+    builder.args(&cmd.args);
+
+    // 1. Environment Sanitization
+    builder.env_clear();
+    builder.env("PATH", "/usr/bin:/usr/sbin:/bin:/sbin");
+    builder.env("LANG", "C.UTF-8");
+    builder.env("TERM", "dumb");
+    builder.env("USER", &current_user);
+    builder.env("HOME", &current_home);
+
+    // 2. Prevent interactive input hanging
+    builder.stdin(Stdio::null());
+    builder.stdout(Stdio::piped());
+    builder.stderr(Stdio::piped());
+
+    // 3. Spawn child process
+    let mut child = builder
+        .spawn()
+        .with_context(|| format!("Failed to spawn process {:?}", cmd.binary_path))?;
+
+    let mut stdout_pipe = child.stdout.take().expect("stdout piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr piped");
+
+    // 4. Asynchronously read streams with strict size cap
+    let read_stdout = async move {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let mut truncated = false;
+        loop {
+            match stdout_pipe.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    if buf.len() + n > MAX_OUTPUT_BYTES {
+                        let keep = MAX_OUTPUT_BYTES.saturating_sub(buf.len());
+                        buf.extend_from_slice(&chunk[..keep]);
+                        truncated = true;
+                        break;
+                    } else {
+                        buf.extend_from_slice(&chunk[..n]);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        (buf, truncated)
     };
 
+    let read_stderr = async move {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let mut truncated = false;
+        loop {
+            match stderr_pipe.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    if buf.len() + n > MAX_OUTPUT_BYTES {
+                        let keep = MAX_OUTPUT_BYTES.saturating_sub(buf.len());
+                        buf.extend_from_slice(&chunk[..keep]);
+                        truncated = true;
+                        break;
+                    } else {
+                        buf.extend_from_slice(&chunk[..n]);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        (buf, truncated)
+    };
+
+    // 5. Execute with timeout and kill on timeout
+    let exec_future = async {
+        let (status_res, (stdout_bytes, stdout_trunc), (stderr_bytes, stderr_trunc)) =
+            tokio::join!(child.wait(), read_stdout, read_stderr);
+        (status_res, stdout_bytes, stderr_bytes, stdout_trunc || stderr_trunc)
+    };
+
+    let (status_res, stdout_bytes, stderr_bytes, was_truncated) =
+        match timeout(Duration::from_secs(timeout_secs), exec_future).await {
+            Ok(res) => res,
+            Err(_) => {
+                let _ = child.kill().await;
+                bail!("command execution timed out after {} seconds (process killed)", timeout_secs);
+            }
+        };
+
+    let status = status_res.context("Failed to wait on child process")?;
     let duration_ms = start.elapsed().as_millis() as u64;
-    
-    // Default exit code to -1 if killed by signal (on Unix)
-    let exit_code = output.status.code().unwrap_or(-1);
+    let exit_code = status.code().unwrap_or(-1);
 
     Ok(ExecResult {
         exit_code,
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
+        stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
         duration_ms,
+        truncated: was_truncated,
     })
 }

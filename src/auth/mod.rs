@@ -6,6 +6,8 @@ use std::fs;
 use std::path::PathBuf;
 use rand::Rng;
 
+use subtle::ConstantTimeEq;
+
 /// Stored token entry (token hash, never the raw token)
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StoredToken {
@@ -45,7 +47,7 @@ impl TokenStore {
         })
     }
     
-    /// Save to tokens.yaml file
+    /// Save to tokens.yaml file atomically using a temporary file and rename
     pub fn save(&self) -> Result<()> {
         let content = serde_yaml::to_string(&self.tokens)
             .with_context(|| "Failed to serialize token store")?;
@@ -55,8 +57,11 @@ impl TokenStore {
                 .with_context(|| format!("Failed to create directory {:?}", parent))?;
         }
 
-        fs::write(&self.path, content)
-            .with_context(|| format!("Failed to write token store to {:?}", self.path))?;
+        let temp_path = self.path.with_extension("tmp");
+        fs::write(&temp_path, &content)
+            .with_context(|| format!("Failed to write temporary token store to {:?}", temp_path))?;
+        fs::rename(&temp_path, &self.path)
+            .with_context(|| format!("Failed to atomically replace token store at {:?}", self.path))?;
             
         Ok(())
     }
@@ -98,7 +103,7 @@ impl TokenStore {
     }
     
     /// Validate a raw token string. Returns the StoredToken if valid and not expired.
-    /// Also updates last_used_at.
+    /// Also updates last_used_at. Uses constant-time hash comparison to prevent timing leaks.
     pub fn validate(&mut self, raw_token: &str) -> Result<Option<StoredToken>> {
         let mut hasher = Sha256::new();
         hasher.update(raw_token.as_bytes());
@@ -108,7 +113,8 @@ impl TokenStore {
         
         let mut found_index = None;
         for (i, token) in self.tokens.iter().enumerate() {
-            if token.hash == hash {
+            let is_match: bool = token.hash.as_bytes().ct_eq(hash.as_bytes()).into();
+            if is_match {
                 if let Some(expires_at) = token.expires_at {
                     if now > expires_at {
                         return Ok(None); // Expired

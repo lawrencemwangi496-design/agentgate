@@ -40,6 +40,7 @@ pub struct ExecSuccessResponse {
     pub stdout: String,
     pub stderr: String,
     pub duration_ms: u64,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -400,6 +401,7 @@ async fn exec_handler(
             stdout: exec_res.stdout,
             stderr: exec_res.stderr,
             duration_ms: exec_res.duration_ms,
+            truncated: exec_res.truncated,
         }),
     )
         .into_response()
