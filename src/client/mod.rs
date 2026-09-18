@@ -92,8 +92,22 @@ pub fn save_client_config(server: &str, token: &str, insecure_tls: bool) -> Resu
 }
 
 /// Handle `agentgate login`
-pub async fn handle_login(server: String, token_opt: Option<String>, insecure: bool) -> Result<()> {
-    let clean_server = server.trim_end_matches('/').to_string();
+pub async fn handle_login(
+    server_opt: Option<String>,
+    token_opt: Option<String>,
+    insecure: bool,
+) -> Result<()> {
+    use std::io::IsTerminal;
+
+    // If running in terminal without explicit token, launch interactive wizard (like gh auth login)
+    if token_opt.is_none() && io::stdin().is_terminal() {
+        return handle_interactive_login(server_opt, token_opt, insecure).await;
+    }
+
+    let clean_server = server_opt
+        .unwrap_or_else(|| "https://127.0.0.1:7991".to_string())
+        .trim_end_matches('/')
+        .to_string();
 
     let raw_token = match token_opt {
         Some(t) => t.trim().to_string(),
@@ -165,6 +179,189 @@ pub async fn handle_login(server: String, token_opt: Option<String>, insecure: b
     println!("   agentgate exec uptime");
     println!("   agentgate exec systemctl status nginx");
     println!("   agentgate exec \"docker ps\"\n");
+
+    Ok(())
+}
+
+/// Interactive login wizard (modeled on `gh auth login`)
+pub async fn handle_interactive_login(
+    initial_server: Option<String>,
+    initial_token: Option<String>,
+    insecure: bool,
+) -> Result<()> {
+    println!("==========================================================");
+    println!("             🚪 AgentGate Interactive Login");
+    println!("==========================================================");
+
+    // Step 1: Select server
+    let server_url = if let Some(s) = initial_server {
+        s.trim_end_matches('/').to_string()
+    } else {
+        println!("? What AgentGate server do you want to log into?");
+        println!("  1) This local machine (https://127.0.0.1:7991)");
+        println!("  2) Remote server (enter IP or domain)");
+        print!("\nSelect option [1-2, default 1]: ");
+        io::stdout().flush()?;
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice)?;
+        let choice = choice.trim();
+
+        if choice == "2" {
+            print!("Enter server address (IP or domain): ");
+            io::stdout().flush()?;
+            let mut addr = String::new();
+            io::stdin().read_line(&mut addr)?;
+            let addr = addr.trim();
+
+            print!("Enter server port [default: 7991]: ");
+            io::stdout().flush()?;
+            let mut port_str = String::new();
+            io::stdin().read_line(&mut port_str)?;
+            let port = port_str.trim().parse::<u16>().unwrap_or(7991);
+
+            let clean_addr = addr
+                .trim_start_matches("http://")
+                .trim_start_matches("https://");
+            if clean_addr.is_empty() {
+                "https://127.0.0.1:7991".to_string()
+            } else {
+                format!("https://{}:{}", clean_addr, port)
+            }
+        } else {
+            "https://127.0.0.1:7991".to_string()
+        }
+    };
+
+    let clean_server = server_url.trim_end_matches('/').to_string();
+
+    // Check if server is running / reachable
+    let is_local = clean_server.contains("127.0.0.1") || clean_server.contains("localhost");
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(insecure)
+        .timeout(std::time::Duration::from_secs(3))
+        .build()?;
+
+    let health_url = format!("{}/health", clean_server);
+    let is_online = match client.get(&health_url).send().await {
+        Ok(r) => r.status().is_success(),
+        Err(_) => false,
+    };
+
+    if !is_online && is_local {
+        println!("\n🟡 AgentGate daemon is not currently running locally.");
+        print!("? Would you like to start the daemon now? [Y/n]: ");
+        io::stdout().flush()?;
+        let mut ans = String::new();
+        io::stdin().read_line(&mut ans)?;
+        let ans = ans.trim().to_lowercase();
+        if (ans.is_empty() || ans == "y" || ans == "yes")
+            && let Ok(config) = crate::config::AgentGateConfig::load()
+        {
+            let _ = crate::cli::handle_start(crate::cli::StartArgs::default(), &config);
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        }
+    }
+
+    // Step 2: Authentication method
+    let raw_token = if let Some(t) = initial_token {
+        t.trim().to_string()
+    } else if is_local {
+        println!("\n? How would you like to authenticate?");
+        println!("  1) Auto-generate a new CLI token with 'read-only' policy (Instant connect)");
+        println!("  2) Auto-generate a new CLI token with 'docker-ops' policy");
+        println!("  3) Auto-generate a new CLI token with 'webserver-ops' policy");
+        println!("  4) Paste an authentication token manually");
+        print!("\nSelect option [1-4, default 1]: ");
+        io::stdout().flush()?;
+        let mut auth_choice = String::new();
+        io::stdin().read_line(&mut auth_choice)?;
+        let auth_choice = auth_choice.trim();
+
+        let policy_name = match auth_choice {
+            "2" => "docker-ops",
+            "3" => "webserver-ops",
+            "4" => "",
+            _ => "read-only",
+        };
+
+        if policy_name.is_empty() {
+            print!("\nEnter AgentGate Token (starts with ag_): ");
+            io::stdout().flush()?;
+            let mut line = String::new();
+            io::stdin().lock().read_line(&mut line)?;
+            line.trim().to_string()
+        } else {
+            // Automatically generate a token on this machine!
+            let config = crate::config::AgentGateConfig::load()?;
+            let mut token_store = crate::auth::TokenStore::load(&config.tokens_file)?;
+            let token_name = format!("cli-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+            let new_token = token_store.create(&token_name, policy_name, None)?;
+            token_store.save()?;
+            println!(
+                "✓ Generated token '{}' (Policy: {}, Never expires)",
+                token_name, policy_name
+            );
+            new_token
+        }
+    } else {
+        print!(
+            "\nEnter AgentGate Token for {} (starts with ag_): ",
+            clean_server
+        );
+        io::stdout().flush()?;
+        let mut line = String::new();
+        io::stdin().lock().read_line(&mut line)?;
+        line.trim().to_string()
+    };
+
+    if raw_token.is_empty() {
+        anyhow::bail!("Token cannot be empty.");
+    }
+
+    // Test authentication
+    print!("\nVerifying credentials against {}...", clean_server);
+    io::stdout().flush()?;
+
+    let test_url = format!("{}/v1/exec", clean_server);
+    let auth_ok = match client
+        .post(&test_url)
+        .header("Authorization", format!("Bearer {}", raw_token))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "command": "uptime" }))
+        .send()
+        .await
+    {
+        Ok(r) => r.status().as_u16() != 401 && r.status().as_u16() != 403,
+        Err(_) => true,
+    };
+
+    if auth_ok {
+        println!(" ✓ Connected!");
+    } else {
+        println!(" ⚠️ Server rejected token, saving anyway.");
+    }
+
+    let saved_path = save_client_config(&clean_server, &raw_token, insecure)?;
+
+    let masked = if raw_token.len() > 10 {
+        format!(
+            "{}...{}",
+            &raw_token[..6],
+            &raw_token[raw_token.len() - 4..]
+        )
+    } else {
+        "***".to_string()
+    };
+
+    println!("==========================================================");
+    println!("🎉 Authenticated successfully!");
+    println!("Server:      {}", clean_server);
+    println!("Token:       {}", masked);
+    println!("Saved to:    {}", saved_path.display());
+    println!("==========================================================");
+    println!("👉 Run commands directly:       agentgate exec <command>");
+    println!("👉 Open interactive session:    agentgate shell");
+    println!("----------------------------------------------------------\n");
 
     Ok(())
 }
@@ -651,6 +848,197 @@ pub async fn handle_mcp() -> Result<()> {
             }
             _ => {
                 // Ignore unknown methods or send generic method not found
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Interactive TUI shell for executing commands continuously (like gh / local console)
+pub async fn handle_shell(
+    server_override: Option<String>,
+    token_override: Option<String>,
+    config: &crate::config::AgentGateConfig,
+) -> Result<()> {
+    let mut cfg = match load_client_config()? {
+        Some(c) => c,
+        None => {
+            println!("⚠️  Not logged in yet. Let's get you connected!");
+            handle_login(server_override.clone(), token_override.clone(), true).await?;
+            match load_client_config()? {
+                Some(c) => c,
+                None => anyhow::bail!("Login was cancelled or incomplete."),
+            }
+        }
+    };
+
+    if let Some(s) = server_override {
+        cfg.server = s.trim_end_matches('/').to_string();
+    }
+    if let Some(t) = token_override {
+        cfg.token = t.trim().to_string();
+    }
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(cfg.insecure_tls)
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
+
+    // Fetch server ping & health
+    let start_ping = std::time::Instant::now();
+    let health_url = format!("{}/health", cfg.server);
+    let ping_res = client.get(&health_url).send().await;
+    let latency = start_ping.elapsed().as_millis();
+
+    println!(
+        "\x1b[1;36m========================================================================\x1b[0m"
+    );
+    println!("\x1b[1;37m                 🚪 AgentGate Interactive Session\x1b[0m");
+    println!("  Server:    \x1b[32m{}\x1b[0m", cfg.server);
+    match ping_res {
+        Ok(r) if r.status().is_success() => {
+            println!(
+                "  Status:    \x1b[32m🟢 Online\x1b[0m (latency: {}ms)",
+                latency
+            );
+        }
+        _ => {
+            println!(
+                "  Status:    \x1b[33m🟡 Offline / Unreachable\x1b[0m (daemon may need starting)"
+            );
+        }
+    }
+    println!(
+        "\x1b[1;36m========================================================================\x1b[0m"
+    );
+    println!("Type commands directly (e.g. 'uptime', 'df -h', 'ps', 'systemctl status nginx').");
+    println!(
+        "Helpers: \x1b[33m:help\x1b[0m, \x1b[33m:status\x1b[0m, \x1b[33m:logs\x1b[0m, \x1b[33m:clear\x1b[0m, \x1b[33m:exit\x1b[0m (or Ctrl+D)\n"
+    );
+
+    loop {
+        print!("\x1b[1;34magentgate\x1b[0m> ");
+        io::stdout().flush()?;
+
+        let mut line = String::new();
+        let bytes = io::stdin().read_line(&mut line)?;
+        if bytes == 0 {
+            // EOF (Ctrl+D)
+            println!("\n👋 Bye!");
+            break;
+        }
+
+        let cmd = line.trim();
+        if cmd.is_empty() {
+            continue;
+        }
+
+        match cmd {
+            ":exit" | ":quit" | "exit" | "quit" | ":q" => {
+                println!("👋 Bye!");
+                break;
+            }
+            ":clear" | "clear" => {
+                print!("\x1B[2J\x1B[1;1H");
+                io::stdout().flush()?;
+                continue;
+            }
+            ":help" | "help" => {
+                println!("\n📖 AgentGate Interactive Session Help:");
+                println!(
+                    "  • Type any allowed Linux command directly — no need to write 'agentgate exec'"
+                );
+                println!("  • Diagnostics:     uptime | df -h | free -m | ps aux");
+                println!("  • System Services: systemctl status nginx | journalctl -u nginx -n 50");
+                println!("  • Docker:          docker ps | docker logs --tail 20 app");
+                println!("  • Helpers:");
+                println!("      :status  - Show active connection & server health");
+                println!("      :logs    - View recent audit logs");
+                println!("      :clear   - Clear the terminal screen");
+                println!("      :exit    - Exit this session\n");
+                continue;
+            }
+            ":status" => {
+                let _ = handle_whoami().await;
+                println!();
+                continue;
+            }
+            ":logs" => {
+                let _ = crate::cli::handle_logs(
+                    crate::cli::LogsArgs {
+                        limit: 5,
+                        ..Default::default()
+                    },
+                    config,
+                );
+                println!();
+                continue;
+            }
+            _ => {
+                let exec_url = format!("{}/v1/exec", cfg.server);
+                let start_exec = std::time::Instant::now();
+
+                let res = client
+                    .post(&exec_url)
+                    .header("Authorization", format!("Bearer {}", cfg.token))
+                    .header("Content-Type", "application/json")
+                    .json(&serde_json::json!({ "command": cmd }))
+                    .send()
+                    .await;
+
+                let duration_ms = start_exec.elapsed().as_millis();
+
+                match res {
+                    Ok(resp) => {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+
+                        if status.is_success() {
+                            if let Ok(exec_data) = serde_json::from_str::<ServerExecResponse>(&text)
+                            {
+                                if !exec_data.stdout.is_empty() {
+                                    print!("{}", exec_data.stdout);
+                                    if !exec_data.stdout.ends_with('\n') {
+                                        println!();
+                                    }
+                                }
+                                if !exec_data.stderr.is_empty() {
+                                    eprint!("\x1b[33m{}\x1b[0m", exec_data.stderr);
+                                    if !exec_data.stderr.ends_with('\n') {
+                                        eprintln!();
+                                    }
+                                }
+                                println!(
+                                    "\x1b[90m⚡ {}ms | Exit {}\x1b[0m\n",
+                                    exec_data.duration_ms, exec_data.exit_code
+                                );
+                            } else {
+                                println!("{}", text);
+                                println!("\x1b[90m⚡ {}ms\x1b[0m\n", duration_ms);
+                            }
+                        } else if let Ok(err_data) =
+                            serde_json::from_str::<ServerErrorResponse>(&text)
+                        {
+                            println!("\x1b[1;31m❌ {}\x1b[0m", err_data.message);
+                            println!(
+                                "\x1b[90m⚡ {}ms | Error: {}\x1b[0m\n",
+                                duration_ms, err_data.error
+                            );
+                        } else {
+                            println!(
+                                "\x1b[1;31m❌ Server error (HTTP {}): {}\x1b[0m\n",
+                                status, text
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        println!(
+                            "\x1b[1;31m❌ Failed to communicate with server: {}\x1b[0m\n",
+                            e
+                        );
+                    }
+                }
             }
         }
     }

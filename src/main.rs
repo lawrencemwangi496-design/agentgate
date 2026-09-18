@@ -23,29 +23,23 @@ async fn main() -> Result<()> {
     let mut config = AgentGateConfig::load()?;
 
     match cli.command {
-        Commands::Init(args) => {
+        Some(Commands::Init(args)) => {
             cli::handle_init(args, &config)?;
         }
-        Commands::Start(args) => {
+        Some(Commands::Start(args)) => {
             cli::handle_start(args, &config)?;
         }
-        Commands::Stop => {
+        Some(Commands::Stop) => {
             cli::handle_stop(&config)?;
         }
-        Commands::Restart(args) => {
+        Some(Commands::Restart(args)) => {
             cli::handle_restart(args, &config)?;
         }
-        Commands::Serve(args) => {
+        Some(Commands::Serve(args)) => {
             let listen_addr = if args.remote {
                 "0.0.0.0".to_string()
             } else if args.local {
                 "127.0.0.1".to_string()
-            } else if args.tailscale {
-                if let Some(tip) = cli::get_tailscale_ip() {
-                    tip
-                } else {
-                    anyhow::bail!("No Tailscale interface detected on this machine.");
-                }
             } else {
                 args.listen.unwrap_or(config.listen_addr.clone())
             };
@@ -68,10 +62,10 @@ async fn main() -> Result<()> {
             }
             res?;
         }
-        Commands::Status(args) => {
+        Some(Commands::Status(args)) => {
             cli::handle_status(args, &config)?;
         }
-        Commands::Exec(args) => {
+        Some(Commands::Exec(args)) => {
             agentgate::client::handle_exec(
                 args.command,
                 args.server,
@@ -81,29 +75,45 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
-        Commands::Login(args) => {
+        Some(Commands::Shell(args)) => {
+            agentgate::client::handle_shell(args.server, args.token, &config).await?;
+        }
+        Some(Commands::Menu) => {
+            cli::handle_main_menu(&config).await?;
+        }
+        Some(Commands::Login(args)) => {
             agentgate::client::handle_login(args.server, args.token, args.insecure).await?;
         }
-        Commands::Logout => {
+        Some(Commands::Logout) => {
             agentgate::client::handle_logout()?;
         }
-        Commands::Whoami => {
+        Some(Commands::Whoami) => {
             agentgate::client::handle_whoami().await?;
         }
-        Commands::Guide => {
+        Some(Commands::Guide) => {
             agentgate::client::handle_guide()?;
         }
-        Commands::Mcp => {
+        Some(Commands::Mcp) => {
             agentgate::client::handle_mcp().await?;
         }
-        Commands::Token(cmd) => {
+        Some(Commands::Token(cmd)) => {
             cli::handle_token(cmd.command, &config)?;
         }
-        Commands::Policy(cmd) => {
+        Some(Commands::Policy(cmd)) => {
             cli::handle_policy(cmd.command, &config)?;
         }
-        Commands::Logs(args) => {
+        Some(Commands::Logs(args)) => {
             cli::handle_logs(args, &config)?;
+        }
+        None => {
+            use std::io::IsTerminal;
+            if std::io::stdin().is_terminal() {
+                cli::handle_main_menu(&config).await?;
+            } else {
+                use clap::CommandFactory;
+                let _ = Cli::command().print_help();
+                println!();
+            }
         }
     }
 

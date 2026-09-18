@@ -19,7 +19,7 @@ use tabled::{Table, Tabled};
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -46,6 +46,14 @@ pub enum Commands {
     #[command(name = "exec", alias = "run")]
     Exec(ExecArgs),
 
+    /// Interactive TUI shell to execute commands directly (like gh / local console)
+    #[command(name = "shell", aliases = ["console", "connect", "sh"])]
+    Shell(ShellArgs),
+
+    /// Open interactive manager menu (press 1, 2, 3 to configure and manage)
+    #[command(name = "menu", aliases = ["ui", "manager"])]
+    Menu,
+
     /// Log in AI agent client with an access token (like gh auth login)
     Login(LoginArgs),
 
@@ -62,9 +70,11 @@ pub enum Commands {
     Mcp,
 
     /// Manage authentication tokens for AI agents
+    #[command(alias = "tokens")]
     Token(TokenCommand),
 
     /// Manage command execution policies
+    #[command(alias = "policies")]
     Policy(PolicyCommand),
 
     /// View audit logs of executed and blocked commands
@@ -89,10 +99,6 @@ pub struct InitArgs {
     #[arg(long)]
     pub local: bool,
 
-    /// Bind to Tailscale IP if available
-    #[arg(long)]
-    pub tailscale: bool,
-
     /// Run interactive configuration wizard
     #[arg(long, short)]
     pub interactive: bool,
@@ -116,11 +122,7 @@ pub struct StartArgs {
     #[arg(long)]
     pub local: bool,
 
-    /// Bind to Tailscale IP if available
-    #[arg(long)]
-    pub tailscale: bool,
-
-    /// Run as plain HTTP without TLS (useful for private Tailscale/LAN testing)
+    /// Run as plain HTTP without TLS (useful for private network testing)
     #[arg(long, default_value_t = false)]
     pub no_tls: bool,
 }
@@ -143,10 +145,6 @@ pub struct ServeArgs {
     #[arg(long)]
     pub local: bool,
 
-    /// Bind to Tailscale IP if available
-    #[arg(long)]
-    pub tailscale: bool,
-
     /// Optional path to custom TLS certificate (e.g. Let's Encrypt fullchain.pem)
     #[arg(long)]
     pub tls_cert: Option<std::path::PathBuf>,
@@ -155,7 +153,7 @@ pub struct ServeArgs {
     #[arg(long)]
     pub tls_key: Option<std::path::PathBuf>,
 
-    /// Run as plain HTTP without TLS (useful for private Tailscale/LAN testing)
+    /// Run as plain HTTP without TLS (useful for private network testing)
     #[arg(long, default_value_t = false)]
     pub no_tls: bool,
 }
@@ -198,28 +196,39 @@ pub struct ExecArgs {
     pub quiet: bool,
 }
 
-#[derive(Args, Clone, Debug)]
+#[derive(Args, Clone, Debug, Default)]
 pub struct LoginArgs {
     /// AgentGate authentication token (starts with ag_)
     #[arg(long, short)]
     pub token: Option<String>,
 
-    /// Server URL to connect to
-    #[arg(long, short, default_value = "https://127.0.0.1:7991")]
-    pub server: String,
+    /// Server URL to connect to (default: interactive prompt or https://127.0.0.1:7991)
+    #[arg(long, short)]
+    pub server: Option<String>,
 
     /// Allow self-signed TLS certificates (default: true for localhost)
     #[arg(long, default_value_t = true)]
     pub insecure: bool,
 }
 
-#[derive(Args)]
-pub struct TokenCommand {
-    #[command(subcommand)]
-    pub command: TokenSubcommand,
+#[derive(Args, Clone, Debug, Default)]
+pub struct ShellArgs {
+    /// Server URL to connect to (default: configured server)
+    #[arg(long, short)]
+    pub server: Option<String>,
+
+    /// AgentGate authentication token (default: configured token)
+    #[arg(long, short)]
+    pub token: Option<String>,
 }
 
-#[derive(Subcommand)]
+#[derive(Args, Clone, Default)]
+pub struct TokenCommand {
+    #[command(subcommand)]
+    pub command: Option<TokenSubcommand>,
+}
+
+#[derive(Subcommand, Clone)]
 pub enum TokenSubcommand {
     /// Create a new scoped token for an AI agent
     Create {
@@ -246,13 +255,13 @@ pub enum TokenSubcommand {
     },
 }
 
-#[derive(Args)]
+#[derive(Args, Clone, Default)]
 pub struct PolicyCommand {
     #[command(subcommand)]
-    pub command: PolicySubcommand,
+    pub command: Option<PolicySubcommand>,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 pub enum PolicySubcommand {
     /// List all available policies
     List,
@@ -279,7 +288,7 @@ pub enum PolicySubcommand {
     },
 }
 
-#[derive(Args)]
+#[derive(Args, Clone, Default)]
 pub struct LogsArgs {
     /// Maximum number of recent entries to show
     #[arg(long, default_value_t = 50)]
@@ -361,31 +370,11 @@ pub fn detect_network_addresses(port: u16, protocol: &str) -> Vec<(&'static str,
                 if iface == "lo" || ip == "127.0.0.1" {
                     continue;
                 }
-                if iface.starts_with("tailscale") {
-                    addrs.push(("Tailscale VPN", format!("{}://{}:{}", protocol, ip, port)));
-                } else {
-                    addrs.push(("LAN / Network", format!("{}://{}:{}", protocol, ip, port)));
-                }
+                addrs.push(("Network IP", format!("{}://{}:{}", protocol, ip, port)));
             }
         }
     }
     addrs
-}
-
-pub fn get_tailscale_ip() -> Option<String> {
-    let output = std::process::Command::new("ip")
-        .args(["-brief", "-4", "addr"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 3 && parts[0].starts_with("tailscale") {
-            let ip_cidr = parts[2];
-            return Some(ip_cidr.split('/').next().unwrap_or(ip_cidr).to_string());
-        }
-    }
-    None
 }
 
 fn prompt_interactive_init(_default_listen: &str, default_port: u16) -> Result<(String, u16)> {
@@ -396,14 +385,8 @@ fn prompt_interactive_init(_default_listen: &str, default_port: u16) -> Result<(
     println!("==========================================================");
     println!("Choose where AgentGate should accept connections from:");
     println!("  1) Local only (127.0.0.1) [Recommended for local CLI agents on this PC]");
-    println!("  2) Network & Remote (0.0.0.0) [For web browsers, external agents & Tailscale]");
-    if let Some(ref tip) = get_tailscale_ip() {
-        println!(
-            "  3) Tailscale only ({}) [Private Tailscale VPN mesh only]",
-            tip
-        );
-    }
-    print!("\nSelect option [1-3, default 1]: ");
+    println!("  2) All interfaces (0.0.0.0) [For remote servers, web browsers & external access]");
+    print!("\nSelect option [1-2, default 1]: ");
     std::io::stdout().flush()?;
     let mut choice = String::new();
     std::io::stdin().read_line(&mut choice)?;
@@ -411,7 +394,6 @@ fn prompt_interactive_init(_default_listen: &str, default_port: u16) -> Result<(
 
     let listen = match choice {
         "2" => "0.0.0.0".to_string(),
-        "3" => get_tailscale_ip().unwrap_or_else(|| "127.0.0.1".to_string()),
         _ => "127.0.0.1".to_string(),
     };
 
@@ -431,9 +413,6 @@ pub fn handle_init(args: InitArgs, config: &AgentGateConfig) -> Result<()> {
         ("0.0.0.0".to_string(), args.port.unwrap_or(7991))
     } else if args.local {
         ("127.0.0.1".to_string(), args.port.unwrap_or(7991))
-    } else if args.tailscale {
-        let tip = get_tailscale_ip().unwrap_or_else(|| "127.0.0.1".to_string());
-        (tip, args.port.unwrap_or(7991))
     } else if let Some(l) = args.listen {
         (l, args.port.unwrap_or(7991))
     } else if let Some(p) = args.port {
@@ -528,12 +507,6 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
         "0.0.0.0".to_string()
     } else if args.local {
         "127.0.0.1".to_string()
-    } else if args.tailscale {
-        if let Some(tip) = get_tailscale_ip() {
-            tip
-        } else {
-            bail!("No Tailscale interface detected on this machine. Is Tailscale running?");
-        }
     } else if let Some(l) = args.listen {
         l
     } else {
@@ -631,8 +604,13 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
         protocol, target_listen, target_port
     );
 
-    if target_listen == "0.0.0.0" {
-        let addrs = detect_network_addresses(target_port, protocol);
+    let addrs = if target_listen == "0.0.0.0" {
+        detect_network_addresses(target_port, protocol)
+    } else {
+        Vec::new()
+    };
+
+    if !addrs.is_empty() {
         println!("\n🌐 Network Access URLs:");
         for (label, url) in &addrs {
             println!("   • {:14} {}", label, url);
@@ -644,13 +622,10 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
         "   Local:             {}://127.0.0.1:{}/",
         protocol, target_port
     );
-    if let Some(tip) =
-        get_tailscale_ip().filter(|tip| target_listen == "0.0.0.0" || &target_listen == tip)
-    {
-        println!(
-            "   Tailscale/Remote:  {}://{}:{}/",
-            protocol, tip, target_port
-        );
+    for (label, url) in &addrs {
+        if label != &"Localhost" {
+            println!("   Remote/Network:    {}/", url);
+        }
     }
     println!("\n   Daemon logs:  {}", log_file.display());
     println!("   Execute with: agentgate exec <command>");
@@ -786,10 +761,10 @@ pub fn handle_status(args: StatusArgs, config: &AgentGateConfig) -> Result<()> {
     Ok(())
 }
 
-pub fn handle_token(cmd: TokenSubcommand, config: &AgentGateConfig) -> Result<()> {
+pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> Result<()> {
     let mut store = TokenStore::load(&config.tokens_file)?;
 
-    match cmd {
+    match cmd.unwrap_or(TokenSubcommand::List) {
         TokenSubcommand::Create {
             name,
             policy,
@@ -893,10 +868,10 @@ pub fn handle_token(cmd: TokenSubcommand, config: &AgentGateConfig) -> Result<()
     Ok(())
 }
 
-pub fn handle_policy(cmd: PolicySubcommand, config: &AgentGateConfig) -> Result<()> {
+pub fn handle_policy(cmd: Option<PolicySubcommand>, config: &AgentGateConfig) -> Result<()> {
     let mut store = PolicyStore::load(&config.policies_dir)?;
 
-    match cmd {
+    match cmd.unwrap_or(PolicySubcommand::List) {
         PolicySubcommand::List => {
             let policies = store.list();
             if policies.is_empty() {
@@ -1075,4 +1050,181 @@ pub fn format_expiry(expires_at: Option<chrono::DateTime<chrono::Utc>>) -> Strin
         let human = format_duration_human(remaining);
         format!("{} ({})", human, exp.format("%Y-%m-%d %H:%M"))
     }
+}
+
+/// Interactive Main Menu (TUI Manager for AgentGate)
+pub async fn handle_main_menu(config: &AgentGateConfig) -> Result<()> {
+    use std::io::Write;
+
+    loop {
+        let pid_opt = read_pid(&config.pid_file);
+        let client_cfg = crate::client::load_client_config().ok().flatten();
+
+        println!("\x1b[1;36m==========================================================\x1b[0m");
+        println!("\x1b[1;37m                 🚪 AgentGate Manager\x1b[0m");
+        println!("\x1b[1;36m==========================================================\x1b[0m");
+
+        if let Some(pid) = pid_opt {
+            let port = get_process_port(pid).unwrap_or(config.listen_port);
+            let host = get_process_listen(pid).unwrap_or_else(|| config.listen_addr.clone());
+            println!(
+                "  Daemon:     \x1b[32m🟢 RUNNING\x1b[0m (PID: {}, {}:{})",
+                pid, host, port
+            );
+        } else {
+            println!("  Daemon:     \x1b[31m🔴 STOPPED\x1b[0m");
+        }
+
+        if let Some(ref c) = client_cfg {
+            println!("  Client:     \x1b[32m🟢 Connected\x1b[0m ({})", c.server);
+        } else {
+            println!("  Client:     \x1b[33m⚪ Not logged in\x1b[0m");
+        }
+
+        println!("\n  \x1b[1m1)\x1b[0m Start daemon");
+        println!("  \x1b[1m2)\x1b[0m Stop daemon");
+        println!("  \x1b[1m3)\x1b[0m Check status & network URLs");
+        println!("  \x1b[1m4)\x1b[0m Create new scoped token (interactive wizard)");
+        println!("  \x1b[1m5)\x1b[0m View active tokens");
+        println!("  \x1b[1m6)\x1b[0m Connect / Login to server");
+        println!("  \x1b[1m7)\x1b[0m Open interactive shell (run commands directly)");
+        println!("  \x1b[1m8)\x1b[0m View audit logs");
+        println!("  \x1b[1m0)\x1b[0m Exit");
+
+        print!("\nSelect an option [0-8]: ");
+        std::io::stdout().flush()?;
+
+        let mut input = String::new();
+        let bytes = std::io::stdin().read_line(&mut input)?;
+        if bytes == 0 {
+            // EOF / Ctrl+D
+            println!("\n👋 Goodbye!");
+            break;
+        }
+
+        let choice = input.trim();
+        println!();
+
+        match choice {
+            "1" => {
+                println!("--- Start AgentGate Daemon ---");
+                println!("Where should the daemon listen?");
+                println!("  1) Local machine only (127.0.0.1) [Recommended for local CLI agents]");
+                println!(
+                    "  2) All network interfaces (0.0.0.0) [For external agents & remote access]"
+                );
+                print!("Select [1-2, default 1]: ");
+                std::io::stdout().flush()?;
+                let mut s_choice = String::new();
+                std::io::stdin().read_line(&mut s_choice)?;
+                let remote = s_choice.trim() == "2";
+
+                print!("Port to listen on [default: {}]: ", config.listen_port);
+                std::io::stdout().flush()?;
+                let mut p_choice = String::new();
+                std::io::stdin().read_line(&mut p_choice)?;
+                let port = p_choice.trim().parse::<u16>().ok();
+
+                let args = StartArgs {
+                    listen: None,
+                    port,
+                    remote,
+                    local: !remote,
+                    no_tls: false,
+                };
+                let _ = handle_start(args, config);
+                println!();
+            }
+            "2" => {
+                let _ = handle_stop(config);
+                println!();
+            }
+            "3" => {
+                let _ = handle_status(StatusArgs::default(), config);
+                println!();
+            }
+            "4" => {
+                println!("--- Create Scoped Token ---");
+                print!("Enter token name [default: agent-cli]: ");
+                std::io::stdout().flush()?;
+                let mut name = String::new();
+                std::io::stdin().read_line(&mut name)?;
+                let mut name = name.trim().to_string();
+                if name.is_empty() {
+                    name = "agent-cli".to_string();
+                }
+
+                println!("\nSelect policy for this token:");
+                println!("  1) read-only     (System diagnostics: uptime, df, free, ps, uname)");
+                println!("  2) docker-ops    (Docker container management)");
+                println!("  3) webserver-ops (Nginx and web service management)");
+                print!("Select [1-3, default 1]: ");
+                std::io::stdout().flush()?;
+                let mut pol_choice = String::new();
+                std::io::stdin().read_line(&mut pol_choice)?;
+                let policy = match pol_choice.trim() {
+                    "2" => "docker-ops",
+                    "3" => "webserver-ops",
+                    _ => "read-only",
+                };
+
+                println!("\nSelect expiration:");
+                println!("  1) 24 hours");
+                println!("  2) 7 days");
+                println!("  3) 30 days");
+                println!("  4) Never (Permanent)");
+                print!("Select [1-4, default 1]: ");
+                std::io::stdout().flush()?;
+                let mut exp_choice = String::new();
+                std::io::stdin().read_line(&mut exp_choice)?;
+                let expires = match exp_choice.trim() {
+                    "2" => Some("7d".to_string()),
+                    "3" => Some("30d".to_string()),
+                    "4" => Some("never".to_string()),
+                    _ => Some("24h".to_string()),
+                };
+
+                let token_sub = TokenSubcommand::Create {
+                    name,
+                    policy: policy.to_string(),
+                    expires,
+                };
+                let _ = handle_token(Some(token_sub), config);
+                println!();
+            }
+            "5" => {
+                println!("--- Active Tokens ---");
+                let _ = handle_token(Some(TokenSubcommand::List), config);
+                println!();
+            }
+            "6" => {
+                let _ = crate::client::handle_interactive_login(None, None, true).await;
+                println!();
+            }
+            "7" => {
+                let _ = crate::client::handle_shell(None, None, config).await;
+                println!();
+            }
+            "8" => {
+                println!("--- Audit Logs (Last 10 commands) ---");
+                let _ = handle_logs(
+                    LogsArgs {
+                        limit: 10,
+                        ..Default::default()
+                    },
+                    config,
+                );
+                println!();
+            }
+            "0" | "exit" | "quit" | "q" => {
+                println!("👋 Goodbye!");
+                break;
+            }
+            _ => {
+                println!("Invalid option. Please choose 0-8.\n");
+            }
+        }
+    }
+
+    Ok(())
 }
