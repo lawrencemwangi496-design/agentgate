@@ -147,6 +147,15 @@ fn test_guardrail_policy_behavior() {
     assert!(!standard_policy.matches("passwd", &[]));
     assert!(!standard_policy.matches("cat", &["/etc/shadow".to_string()]));
     assert!(!standard_policy.matches("chmod", &["-R".to_string(), "777".to_string(), "/".to_string()]));
+
+    // Hardened Devil's Advocate Tests: Flag-splitting & permutation bypasses
+    assert!(!standard_policy.matches("rm", &["-r".to_string(), "-f".to_string(), "/".to_string()]));
+    assert!(!standard_policy.matches("rm", &["/".to_string(), "-rf".to_string()]));
+    assert!(!standard_policy.matches("rm", &["-rf".to_string(), "--no-preserve-root".to_string(), "/".to_string()]));
+    assert!(!standard_policy.matches("rm", &["--recursive".to_string(), "--force".to_string(), "/./".to_string()]));
+    assert!(!standard_policy.matches("cat", &["/dev/null".to_string(), "/etc/shadow".to_string()]));
+    assert!(!standard_policy.matches("head", &["/etc/shadow".to_string()]));
+    assert!(!standard_policy.matches("strings", &["/etc/gshadow".to_string()]));
 }
 
 #[test]

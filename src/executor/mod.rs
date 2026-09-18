@@ -15,7 +15,14 @@ const SHELL_METACHARACTERS: &[char] = &[
 pub const MAX_OUTPUT_BYTES: usize = 5 * 1024 * 1024;
 
 /// Trusted system directories for binary execution. Prevents PATH manipulation.
-const TRUSTED_PATHS: &[&str] = &["/usr/bin", "/usr/sbin", "/bin", "/sbin"];
+const TRUSTED_PATHS: &[&str] = &[
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/bin",
+    "/usr/sbin",
+    "/bin",
+    "/sbin",
+];
 
 /// Result of parsing a command string
 #[derive(Debug, Clone)]
@@ -159,7 +166,7 @@ pub async fn execute(cmd: &ParsedCommand, timeout_secs: u64) -> Result<ExecResul
 
     // 1. Environment Sanitization
     builder.env_clear();
-    builder.env("PATH", "/usr/bin:/usr/sbin:/bin:/sbin");
+    builder.env("PATH", "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin");
     builder.env("LANG", "C.UTF-8");
     builder.env("TERM", "dumb");
     builder.env("USER", &current_user);

@@ -102,14 +102,19 @@ impl Policy {
     /// 2. Allow list check: If any rule in `allow` (or legacy `rules`) matches, returns `true`.
     /// 3. If neither matches, returns `false`.
     pub fn matches(&self, command: &str, args: &[String]) -> bool {
-        // 1. Guardrails: Deny rules check
+        // 1. Hardened semantic guardrails (blocks flag splitting, permutations, and alternative viewers)
+        if is_hardened_destructive_guardrail(command, args) {
+            return false;
+        }
+
+        // 2. Custom deny rules check
         for rule in &self.deny {
             if matches_single_rule(rule, command, args) {
                 return false;
             }
         }
 
-        // 2. Allow rules check
+        // 3. Allow rules check
         let allow_rules = if !self.allow.is_empty() {
             &self.allow
         } else {
@@ -124,6 +129,93 @@ impl Policy {
 
         false
     }
+}
+
+/// Normalize a target path by collapsing duplicate slashes and relative "." components
+fn normalize_path_str(p: &str) -> String {
+    let mut parts = Vec::new();
+    for seg in p.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        parts.push(seg);
+    }
+    if p.starts_with('/') {
+        format!("/{}", parts.join("/"))
+    } else {
+        parts.join("/")
+    }
+}
+
+fn is_dangerous_wipe_target(arg: &str) -> bool {
+    let trimmed = arg.trim();
+    if trimmed == "/" || trimmed == "/*" || trimmed == "~" || trimmed == "~/*" {
+        return true;
+    }
+    let norm = normalize_path_str(trimmed);
+    norm == "/" || norm == "/*" || norm == "/root" || norm == "/etc" || norm == "/bin" || norm == "/usr" || norm == "/var"
+}
+
+/// Hardened semantic check for destructive actions (prevents flag-splitting & flag-permutation bypasses)
+pub fn is_hardened_destructive_guardrail(command: &str, args: &[String]) -> bool {
+    let cmd_base = command.rsplit('/').next().unwrap_or(command);
+
+    // 1. Recursive destructive filesystem wipes: rm
+    if cmd_base == "rm" {
+        let has_recursion = args.iter().any(|a| {
+            a == "-r"
+                || a == "-R"
+                || a == "--recursive"
+                || (a.starts_with('-') && !a.starts_with("--") && (a.contains('r') || a.contains('R')))
+        });
+        let has_dangerous_target = args.iter().any(|a| is_dangerous_wipe_target(a));
+        if has_recursion && has_dangerous_target {
+            return true;
+        }
+    }
+
+    // 2. Disk formatting & raw partition writes
+    if cmd_base.starts_with("mkfs")
+        || cmd_base == "dd"
+        || cmd_base == "fdisk"
+        || cmd_base == "parted"
+        || cmd_base == "wipefs"
+    {
+        return true;
+    }
+
+    // 3. System shutdowns, poweroffs, and reboots
+    if cmd_base == "shutdown" || cmd_base == "reboot" || cmd_base == "poweroff" || cmd_base == "halt" {
+        return true;
+    }
+    if cmd_base == "init" && args.iter().any(|a| a == "0" || a == "6") {
+        return true;
+    }
+
+    // 4. User account tamper & lockout
+    if cmd_base == "passwd" || cmd_base == "chpasswd" || cmd_base == "userdel" || cmd_base == "groupdel" {
+        return true;
+    }
+
+    // 5. Reading shadow password files with any viewer
+    let readers = ["cat", "less", "more", "head", "tail", "grep", "sed", "awk", "strings", "xxd", "hexdump", "cp", "mv"];
+    if readers.contains(&cmd_base) {
+        if args.iter().any(|a| a.contains("shadow") || a.contains("/etc/shadow") || a.contains("/etc/gshadow")) {
+            return true;
+        }
+    }
+
+    // 6. Root permission sabotage
+    if cmd_base == "chmod" {
+        let has_recursion = args.iter().any(|a| a == "-R" || (a.starts_with('-') && !a.starts_with("--") && a.contains('R')));
+        let has_bad_mode = args.iter().any(|a| a == "777" || a == "000");
+        let has_dangerous_target = args.iter().any(|a| is_dangerous_wipe_target(a));
+        if has_recursion && has_bad_mode && has_dangerous_target {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Helper to match a single PolicyRule against a command and args

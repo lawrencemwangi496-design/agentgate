@@ -1,175 +1,204 @@
-# AgentGate 🚪🔒
+# AgentGate 🚪⚡
 
-> **The secure privilege bridge for AI agents.**  
-> Give AI coding agents, DevOps bots, and LLMs the ability to execute necessary server commands without ever sharing your sudo password, SSH keys, or root access.
-
----
-
-## The Problem
-
-When you pair with AI agents (Claude, Gemini, Cursor, ChatGPT, Antigravity) for infrastructure, debugging, and DevOps:
-- **No sudo access:** Agents cannot type passwords in interactive terminal prompts.
-- **Security nightmare:** Giving an AI agent unrestricted `sudo` or `NOPASSWD: ALL` is dangerous—a single prompt injection or hallucinated `rm` command could destroy your host.
-- **Read-only deadlock:** The agent can diagnose issues, but cannot restart a service, check a secured config, or manage containers.
+> **The zero-trust privilege gateway for AI agents and LLMs.**  
+> Execute commands safely on your Linux machines without sharing SSH keys, exposing passwords, or granting unrestricted `sudo`.
 
 ---
 
-## The AgentGate Solution
+## Why AgentGate is Better than SSH for AI Agents
 
-**AgentGate** is a lightweight, single-binary daemon written in Rust that acts as a secure reverse-proxy gatekeeper for command execution:
-
-1. **Deny-by-default Policy Allowlist:** Agents can *only* run commands explicitly defined in YAML policies.
-2. **Zero Shell Execution:** Commands are executed strictly via POSIX `exec` arguments—**never passed to `sh -c` or `bash -c`**. Shell chaining (`;`, `&&`, `|`, `` ` ``, `$()`, redirects) is blocked at the parser level.
-3. **Scoped Bearer Tokens:** Create isolated tokens with expiration and specific policy bindings.
-4. **Instant Revocation:** Revoke tokens in real-time from the CLI without restarting the daemon.
-5. **Full Audit Logging:** Every allowed, denied, and injection-blocked command is recorded with timestamps, durations, and exit codes.
-6. **Built-in TLS:** Auto-generates local self-signed certificates on first run.
+| Feature | SSH / sudo | AgentGate 🚪 |
+| :--- | :--- | :--- |
+| **Credentials** | Raw SSH private keys or root passwords shared with the LLM | Scoped, revokable SHA-256 tokens (`ag_...`) |
+| **Access Control** | All-or-nothing root access (`sudo NOPASSWD: ALL`) | **Universal Guardrails:** AI has freedom to diagnose and build, but destructive commands (`rm -rf /`, `mkfs`, `shutdown`, `passwd`) are permanently blocked at the gateway level |
+| **Shell Injection** | Raw PTY allows arbitrary shell piping, background jobs, and escape tricks | **Zero Shell:** Commands execute strictly via POSIX exec (`execvp`). Shell metacharacters (`;`, `&&`, `|`, `` ` ``, `$()`) are blocked at the parser |
+| **Audit Trail** | Fragmented bash history (easily wiped or altered) | Immutable, structured audit log (`JSONL`) recording every command, token, duration, and exit code |
+| **Revocation** | Rotating SSH keys or changing root passwords disrupts all users | 1-click instant token revocation without stopping the service |
+| **Agent Ergonomics** | Fragile SSH timeouts, complex TTY prompts, password hangs | Clean HTTP/REST API, native CLI wrapper (`agentgate exec`), and built-in Model Context Protocol (MCP) server |
 
 ---
 
-## Quick Start
+## ⚡ 1-Minute Quick Start
 
-### 1. Initialize
+### 1. Install (Docker-Style Single Binary)
+
+Install directly on your server with root capabilities:
+
 ```bash
-agentgate init
+curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | sudo bash
 ```
-This generates default directories (`~/.config/agentgate/` or `/etc/agentgate/`), starter policies (`read-only`, `docker-ops`, `webserver-ops`), and local TLS certificates.
 
-### 2. Create a Scoped Token
+### 2. Launch the Manager
+
+Run `agentgate` to launch the interactive terminal manager:
+
 ```bash
-agentgate token create --name my-claude-agent --policy read-only
+agentgate
 ```
-Output:
+
 ```text
-✅ Token created successfully!
-----------------------------------------------------------------------
-NAME:       my-claude-agent
-POLICY:     read-only
-EXPIRES:    Never
-TOKEN:      ag_9a8b7c6d5e4f...
-----------------------------------------------------------------------
-⚠️  Save this token now! It will NOT be shown again.
+==========================================================
+                 🚪 AgentGate Manager
+==========================================================
+  AgentGate:     🟢 RUNNING (0.0.0.0:7991, PID: 4210)
+  Client Config: 🟢 Connected (https://127.0.0.1:7991)
+
+  1) Set up AgentGate (Server)
+     → Configure network, TLS certificates & start service
+  2) Connect to AgentGate (Client)
+     → Configure laptop to connect to a remote server
+  3) Secure Shell (Interactive console)
+  4) Manage Tokens (Create, List, Revoke)
+  5) View Audit Logs
+  6) Stop AgentGate
+  7) Update AgentGate
+  0) Exit
+
+Select an option [0-7]: 
 ```
 
-### 3. Start the Daemon
-```bash
-agentgate start
-```
-Starts securely in the background like `tailscale up`. Listens on `https://127.0.0.1:7991`.
-To customize the port:
-```bash
-agentgate start --port 8991
-# or set in ~/.config/agentgate/config.yaml or AGENTGATE_PORT=8991
-```
-*If a port conflict occurs, AgentGate detects it immediately and suggests alternative ports.*
-
-### 4. Client Login & Instant Execution (Like `gh`)
-Instead of wasting LLM prompt tokens typing long, brittle `curl` commands:
-
-```bash
-# Authenticate the agent once (credentials saved with 0600 permissions)
-agentgate login --token ag_9a8b7c6d5e4f...
-
-# Run authorized commands directly!
-agentgate exec uptime
-agentgate exec systemctl status nginx
-agentgate exec "docker ps"
-```
-Stdout and stderr stream directly, remote exit codes are forwarded (0 on success, 126 on policy denial), and agent tokens are not exposed in process arguments.
-
-### 5. Check Status or Stop Anytime
-```bash
-agentgate status    # Shows live daemon PID, port, policies, and client login state
-agentgate stop      # Cleanly stops the background daemon (like tailscale down)
-agentgate guide     # Outputs ready-to-use prompt guidelines for AI agents
-agentgate mcp       # Runs built-in Model Context Protocol (MCP) server for native tool calls
-```
+- **Option 1 (Set up Server):** Starts the server, generates TLS certificates, creates an agent token, and automatically configures your local client.
+- **Option 3 (Secure Shell):** Drops directly into the interactive agent console to run permitted commands live.
 
 ---
 
-## Security in Action
+## 🛡️ The Universal Guardrail Policy Engine
 
-### 1. Blocked Unauthorized Command
-If the agent attempts to run an unlisted command:
-```bash
-agentgate exec cat /etc/shadow
-```
-Output:
-```text
-❌ AgentGate Policy Denied: command 'cat /etc/shadow' is not allowed by policy 'read-only'
-```
-
-### 2. Blocked Shell Injection Attempt
-If an attacker or prompt injection attempts command chaining:
-```bash
-agentgate exec "uptime; rm -rf /"
-```
-Output:
-```text
-❌ AgentGate Injection Blocked: command contains disallowed shell metacharacter: ';'
-```
-
-### 3. DDoS & Hammering Protections
-- **Localhost Default:** Binds to `127.0.0.1` by default, invisible to outside networks.
-- **Request Body Limit:** Hard limit of 64KB on request bodies prevents buffer exhaustion.
-- **Concurrency Rate Limiting:** Built-in connection throttle (128 max concurrent requests) shields system resources from hammering.
-- **Constant-Time Verification:** Token comparison runs in constant-time (`subtle::ConstantTimeEq`), rejecting unauthorized requests with 0 subprocess spawns.
-
-### 4. Instant Revocation
-```bash
-agentgate token revoke my-claude-agent
-```
-Any subsequent request is immediately rejected with `401 Unauthorized`.
-
----
-
-## Audit Logs
-
-Inspect all activity across tokens:
-```bash
-agentgate logs
-```
-Output:
-```text
-╭────────────────┬─────────────────┬─────────────────────────┬───────────┬──────────────────┬──────┬─────────╮
-│ TIME           │ TOKEN           │ COMMAND                 │ POLICY    │ RESULT           │ EXIT │ DUR(ms) │
-├────────────────┼─────────────────┼─────────────────────────┼───────────┼──────────────────┼──────┼─────────┤
-│ 09-18 13:56:44 │ my-claude-agent │ uptime && whoami        │ read-only │ InjectionBlocked │ -1   │ 0       │
-│ 09-18 13:56:39 │ my-claude-agent │ uptime; cat /etc/shadow │ read-only │ InjectionBlocked │ -1   │ 0       │
-│ 09-18 13:56:33 │ my-claude-agent │ cat /etc/os-release     │ read-only │ Allowed          │ 0    │ 2       │
-│ 09-18 13:56:28 │ my-claude-agent │ cat /etc/shadow         │ read-only │ Denied           │ -1   │ 0       │
-│ 09-18 13:56:21 │ my-claude-agent │ uptime                  │ read-only │ Allowed          │ 0    │ 8       │
-╰────────────────┴─────────────────┴─────────────────────────┴───────────┴──────────────────┴──────┴─────────╯
-```
-
-Filter for security events only:
-```bash
-agentgate logs --denied
-```
-
----
-
-## Policy Definition Syntax
-
-Policies are stored as YAML in `~/.config/agentgate/policies/`:
+AgentGate solves the fundamental tension between **agent autonomy** and **server safety**. Instead of locking the AI in a brittle, narrow allowlist where basic diagnostic flags are blocked, AgentGate uses a **deny-first guardrail policy** (`standard.yaml`):
 
 ```yaml
-name: webserver-ops
-description: "Manage nginx and view system status"
-rules:
-  - command: systemctl
-    args: ["status", "*"]          # Wildcard: check status of any service
-  - command: systemctl
-    args: ["restart", "nginx"]     # Exact match: can only restart nginx
-  - command: journalctl
-    args: ["-u", "nginx", "*"]     # Wildcard trailing: read nginx logs
+name: standard
+description: "General execution with safety guardrails (destructive commands permanently blocked)"
+allow:
+  - command: "*"
+    args: ["*"]
+deny:
+  # Destructive filesystem wipes
+  - command: rm
+    args: ["-rf", "/*"]
+  - command: rm
+    args: ["-rf", "/"]
+  - command: rm
+    args: ["-rf", "~"]
+
+  # Disk formatting & partition destruction
+  - command: mkfs*
+    args: ["*"]
+  - command: dd
+    args: ["*"]
+  - command: fdisk
+    args: ["*"]
+  - command: parted
+    args: ["*"]
+  - command: wipefs
+    args: ["*"]
+
+  # System shutdown & reboot lockout
+  - command: shutdown
+    args: ["*"]
+  - command: reboot
+    args: ["*"]
+  - command: poweroff
+    args: ["*"]
+  - command: init
+    args: ["0"]
+
+  # User credential hijacking
+  - command: passwd
+    args: ["*"]
+  - command: chpasswd
+    args: ["*"]
   - command: cat
-    args: ["/etc/nginx/nginx.conf"]
-  - command: nginx
-    args: ["-t"]
+    args: ["/etc/shadow"]
+  - command: cat
+    args: ["*shadow*"]
+
+  # Permission sabotage
+  - command: chmod
+    args: ["-R", "777", "/"]
+  - command: chmod
+    args: ["-R", "000", "/"]
 ```
+
+### What This Means in Practice:
+- **AI Freedom:** The agent can run `uptime -p`, `df -h`, `cat /etc/nginx/nginx.conf`, `docker ps`, `systemctl status postgresql`, and compile code without being blocked by missing flags.
+- **Strict Protection:** The gateway **rejects any destructive command** in the deny list with exit code `126`, protecting your server from hallucinations, rogue scripts, or prompt injections.
+- **Custom Policies:** Any custom policy created with `agentgate policy create <name>` automatically inherits these security guardrails.
+
+---
+
+## 💻 Client & AI Usage
+
+### Seamless CLI Execution
+
+Once connected, your AI agent can execute commands directly without typing passwords or writing brittle `curl` scripts:
+
+```bash
+# Diagnostic inspection
+agentgate exec uptime
+agentgate exec df -h
+agentgate exec free -m
+
+# Service management
+agentgate exec systemctl status nginx
+agentgate exec "docker ps -a"
+
+# JSON output mode (ideal for agent parsing)
+agentgate exec --json systemctl status nginx
+```
+
+### Model Context Protocol (MCP) Server
+
+AgentGate features native support for the Model Context Protocol:
+
+```bash
+agentgate mcp
+```
+Connect your LLM (Claude Desktop, Cursor, Gemini) directly to AgentGate as an MCP tool provider for zero-overhead, native tool-calling capabilities.
+
+---
+
+## 🔄 Automatic & Seamless Updates
+
+Keep AgentGate updated just like `tailscale update`:
+
+```bash
+agentgate update
+```
+
+The background server also includes an automatic updater that checks GitHub releases every 30 minutes to ensure you always have the latest security patches.
+
+---
+
+## 🔒 Security Architecture
+
+1. **POSIX Argument Execution:** Commands are parsed and executed directly using `std::process::Command` without invoking `/bin/sh` or `/bin/bash`.
+2. **Strict Injection Filtering:** Shell chaining characters (`;`, `&&`, `||`, `` ` ``, `$()`, `>`, `<`, `\n`) are rejected at the parser level before process creation.
+3. **Constant-Time Verification:** Bearer tokens are hashed with SHA-256 and compared using constant-time algorithms (`subtle::ConstantTimeEq`) to prevent timing attacks.
+4. **Denial-of-Service Defense:** Request body limits (64KB) and concurrency rate limiting (128 max concurrent requests) protect server resources.
+5. **Detailed Audit Trail:** Every event is logged to `~/.config/agentgate/logs/audit-YYYY-MM-DD.jsonl`.
+
+---
+
+## 📜 CLI Reference
+
+| Command | Description |
+| :--- | :--- |
+| `agentgate` | Launch interactive TUI manager |
+| `agentgate start` | Start server in the background (like `tailscale up`) |
+| `agentgate stop` | Stop background server (like `tailscale down`) |
+| `agentgate status` | View server PID, network addresses, and active policies |
+| `agentgate exec <cmd>` | Execute a command through the gateway |
+| `agentgate token create` | Generate a new scoped agent token |
+| `agentgate token list` | List all registered tokens and expiration dates |
+| `agentgate token revoke` | Instantly revoke an agent token |
+| `agentgate policy list` | Inspect loaded execution policies |
+| `agentgate logs` | View recent command audit logs |
+| `agentgate update` | Update AgentGate to the latest release |
+| `agentgate mcp` | Start Model Context Protocol server |
 
 ---
 
 ## License
-MIT
+
+MIT © [Lawrence Mwangi](https://github.com/lawrencemwangi496-design)

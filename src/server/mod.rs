@@ -103,10 +103,10 @@ pub async fn run_server(
         }
     }
 
-    // Background auto-updater: checks GitHub releases every 30 minutes and updates automatically
+    // Background update checker: checks GitHub releases every 60 minutes and logs notice
     tokio::spawn(async move {
         let client = match reqwest::Client::builder()
-            .user_agent("AgentGate-AutoUpdater")
+            .user_agent("AgentGate-UpdateChecker")
             .timeout(std::time::Duration::from_secs(10))
             .build()
         {
@@ -128,23 +128,14 @@ pub async fn run_server(
                         let current_ver = format!("v{}", env!("CARGO_PKG_VERSION"));
                         if tag != current_ver && !tag.is_empty() {
                             tracing::info!(
-                                "🔄 New AgentGate release available: {} (current: {}). Auto-updating...",
+                                "📢 New AgentGate release available: {} (current: {}). Run 'agentgate update' to upgrade.",
                                 tag, current_ver
                             );
-                            let status = std::process::Command::new("sh")
-                                .arg("-c")
-                                .arg("curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | bash")
-                                .status();
-                            if let Ok(s) = status {
-                                if s.success() {
-                                    tracing::info!("✅ AgentGate automatically updated to {}", tag);
-                                }
-                            }
                         }
                     }
                 }
             }
-            tokio::time::sleep(tokio::time::Duration::from_secs(1800)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
         }
     });
 

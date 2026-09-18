@@ -454,10 +454,10 @@ pub fn handle_init(args: InitArgs, config: &AgentGateConfig) -> Result<()> {
         config.tls_key_path().display()
     );
 
-    println!("\n✨ Setup complete! To start the daemon:");
+    println!("\n✨ Setup complete! To start AgentGate:");
     println!("  agentgate start\n");
     println!("To create your first token for an AI agent:");
-    println!("  agentgate token create --name my-agent --policy read-only\n");
+    println!("  agentgate token create --name my-agent --policy standard\n");
 
     Ok(())
 }
@@ -1397,7 +1397,7 @@ async fn handle_server_setup_wizard(config: &AgentGateConfig) -> Result<()> {
     }
 
     println!("\n\x1b[1;36m👉 ON YOUR LAPTOP / CLIENT PC:\x1b[0m");
-    println!("   Connect with: agentgate client connect --server <SERVER_IP>:{} --token <TOKEN>", port);
+    println!("   Connect with: agentgate login --server https://<SERVER_IP>:{} --token <TOKEN>", port);
     println!("\x1b[1;32m==========================================================\x1b[0m\n");
 
     Ok(())

@@ -36,7 +36,7 @@ else
 fi
 
 TMP_DIR="$(mktemp -d)"
-echo "⬇️ Downloading AgentGate ($VERSION)..."
+echo "⬇️ Downloading latest AgentGate release..."
 
 if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${TAR_NAME}"
@@ -60,19 +60,23 @@ fi
 
 rm -rf "$TMP_DIR"
 
-# Ensure directory is in PATH if using ~/.local/bin
+# Check if INSTALL_DIR is in PATH
 case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;
     *)
-        export PATH="${INSTALL_DIR}:${PATH}"
+        echo "⚠️  Note: ${INSTALL_DIR} is not in your current PATH."
+        echo "   Add it with: export PATH=\"${INSTALL_DIR}:\$PATH\""
+        echo ""
         ;;
 esac
 
 echo "✅ AgentGate installed successfully!"
 echo ""
 
-# If terminal is interactive, open the wizard immediately!
-if [ -t 0 ]; then
+# If terminal is interactive or tty is available, open the manager immediately!
+if [ -c /dev/tty ]; then
+    exec "${INSTALL_DIR}/agentgate" < /dev/tty
+elif [ -t 0 ]; then
     exec "${INSTALL_DIR}/agentgate"
 else
     echo "👉 Run 'agentgate' to launch the interactive manager!"

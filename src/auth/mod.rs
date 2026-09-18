@@ -57,9 +57,19 @@ impl TokenStore {
                 .with_context(|| format!("Failed to create directory {:?}", parent))?;
         }
 
-        let temp_path = self.path.with_extension("tmp");
+        let temp_path = self.path.with_extension(format!(
+            "tmp.{}",
+            &uuid::Uuid::new_v4().to_string()[..8]
+        ));
         fs::write(&temp_path, &content)
             .with_context(|| format!("Failed to write temporary token store to {:?}", temp_path))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600));
+        }
+
         fs::rename(&temp_path, &self.path).with_context(|| {
             format!(
                 "Failed to atomically replace token store at {:?}",
