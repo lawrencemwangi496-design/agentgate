@@ -6,6 +6,8 @@ use crate::server::cert;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use std::fs;
+use std::os::unix::process::CommandExt;
+use std::path::Path;
 use tabled::settings::Style;
 use tabled::{Table, Tabled};
 
@@ -23,13 +25,41 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Initialize configuration, default policies, and TLS certificates
-    Init,
+    Init(InitArgs),
 
-    /// Start the AgentGate daemon server
+    /// Start the AgentGate daemon in the background (like tailscale up)
+    Start(StartArgs),
+
+    /// Stop the running AgentGate daemon (like tailscale down)
+    Stop,
+
+    /// Restart the running AgentGate daemon
+    Restart(StartArgs),
+
+    /// Run the AgentGate server in the foreground (for debugging or systemd)
     Serve(ServeArgs),
 
-    /// Check daemon status and health
+    /// Check daemon status, health, and loaded policies
     Status(StatusArgs),
+
+    /// Execute an authorized system command through AgentGate (client tool, like gh)
+    #[command(name = "exec", alias = "run")]
+    Exec(ExecArgs),
+
+    /// Log in AI agent client with an access token (like gh auth login)
+    Login(LoginArgs),
+
+    /// Log out client and remove saved credentials
+    Logout,
+
+    /// Show current client authentication status (like gh auth status)
+    Whoami,
+
+    /// Print AI agent instruction guide and system prompt rules
+    Guide,
+
+    /// Start Model Context Protocol (MCP) server for native AI tool calling
+    Mcp,
 
     /// Manage authentication tokens for AI agents
     Token(TokenCommand),
@@ -41,15 +71,41 @@ pub enum Commands {
     Logs(LogsArgs),
 }
 
-#[derive(Args)]
-pub struct ServeArgs {
-    /// Address to listen on (127.0.0.1 for local only, 0.0.0.0 for remote/network access)
-    #[arg(long, default_value = "127.0.0.1")]
-    pub listen: String,
+#[derive(Args, Clone, Default)]
+pub struct InitArgs {
+    /// Default port to configure (default: 7991)
+    #[arg(long)]
+    pub port: Option<u16>,
 
-    /// Port to listen on
-    #[arg(long, default_value_t = 7991)]
-    pub port: u16,
+    /// Default address to listen on (default: 127.0.0.1)
+    #[arg(long)]
+    pub listen: Option<String>,
+}
+
+#[derive(Args, Clone, Default)]
+pub struct StartArgs {
+    /// Address to listen on (default: 127.0.0.1, or configured)
+    #[arg(long)]
+    pub listen: Option<String>,
+
+    /// Port to listen on (default: 7991, or configured)
+    #[arg(long)]
+    pub port: Option<u16>,
+
+    /// Run as plain HTTP without TLS
+    #[arg(long, default_value_t = false)]
+    pub no_tls: bool,
+}
+
+#[derive(Args, Clone, Default)]
+pub struct ServeArgs {
+    /// Address to listen on (default: 127.0.0.1, or configured)
+    #[arg(long)]
+    pub listen: Option<String>,
+
+    /// Port to listen on (default: 7991, or configured)
+    #[arg(long)]
+    pub port: Option<u16>,
 
     /// Optional path to custom TLS certificate (e.g. Let's Encrypt fullchain.pem)
     #[arg(long)]
@@ -64,19 +120,57 @@ pub struct ServeArgs {
     pub no_tls: bool,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone, Default)]
 pub struct StatusArgs {
-    /// Address of running daemon
-    #[arg(long, default_value = "127.0.0.1")]
-    pub host: String,
+    /// Address of running daemon (default: 127.0.0.1, or configured)
+    #[arg(long)]
+    pub host: Option<String>,
 
-    /// Port of running daemon
-    #[arg(long, default_value_t = 7991)]
-    pub port: u16,
+    /// Port of running daemon (default: 7991, or configured)
+    #[arg(long)]
+    pub port: Option<u16>,
 
     /// Use HTTPS
     #[arg(long, default_value_t = true)]
     pub tls: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct ExecArgs {
+    /// Command and arguments to execute (e.g. 'uptime', 'systemctl restart nginx')
+    #[arg(trailing_var_arg = true, required = true)]
+    pub command: Vec<String>,
+
+    /// Override server URL (e.g. https://127.0.0.1:7991)
+    #[arg(long)]
+    pub server: Option<String>,
+
+    /// Override auth token
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Output full JSON response from server
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+
+    /// Suppress error banners
+    #[arg(long, short, default_value_t = false)]
+    pub quiet: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct LoginArgs {
+    /// AgentGate authentication token (starts with ag_)
+    #[arg(long, short)]
+    pub token: Option<String>,
+
+    /// Server URL to connect to
+    #[arg(long, short, default_value = "https://127.0.0.1:7991")]
+    pub server: String,
+
+    /// Allow self-signed TLS certificates (default: true for localhost)
+    #[arg(long, default_value_t = true)]
+    pub insecure: bool,
 }
 
 #[derive(Args)]
@@ -207,8 +301,8 @@ const STARTER_READ_ONLY: &str = include_str!("../../policies/read-only.yaml");
 const STARTER_DOCKER: &str = include_str!("../../policies/docker-ops.yaml");
 const STARTER_WEBSERVER: &str = include_str!("../../policies/webserver-ops.yaml");
 
-pub fn handle_init(config: &AgentGateConfig) -> Result<()> {
-    AgentGateConfig::init()?;
+pub fn handle_init(args: InitArgs, config: &AgentGateConfig) -> Result<()> {
+    AgentGateConfig::init(args.port, args.listen)?;
 
     // Populate starter policies if they don't already exist
     let starters = [
@@ -232,9 +326,225 @@ pub fn handle_init(config: &AgentGateConfig) -> Result<()> {
     println!("  ✓ Generated TLS private key at: {}", config.tls_key_path().display());
 
     println!("\n✨ Setup complete! To start the daemon:");
-    println!("  agentgate serve\n");
-    println!("To create your first token:");
+    println!("  agentgate start\n");
+    println!("To create your first token for an AI agent:");
     println!("  agentgate token create --name my-agent --policy read-only\n");
+
+    Ok(())
+}
+
+pub fn read_pid(pid_file: &Path) -> Option<i32> {
+    if !pid_file.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(pid_file).ok()?;
+    let pid: i32 = content.trim().parse().ok()?;
+    if unsafe { libc::kill(pid, 0) == 0 } {
+        Some(pid)
+    } else {
+        let _ = fs::remove_file(pid_file);
+        None
+    }
+}
+
+pub fn get_process_port(pid: i32) -> Option<u16> {
+    let cmdline_path = format!("/proc/{}/cmdline", pid);
+    let content = fs::read(cmdline_path).ok()?;
+    let args: Vec<String> = content
+        .split(|&b| b == 0)
+        .filter_map(|s| String::from_utf8(s.to_vec()).ok())
+        .collect();
+
+    args.windows(2)
+        .find(|w| w[0] == "--port")
+        .and_then(|w| w[1].parse::<u16>().ok())
+}
+
+pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
+    let target_listen = args.listen.unwrap_or_else(|| config.listen_addr.clone());
+    let target_port = args.port.unwrap_or(config.listen_port);
+
+    if let Some(pid) = read_pid(&config.pid_file) {
+        let active_port = get_process_port(pid).unwrap_or(config.listen_port);
+        println!("🟢 AgentGate daemon is already running (PID: {})", pid);
+        println!("   Address: https://{}:{}", config.listen_addr, active_port);
+        println!("   Stop with: agentgate stop");
+        return Ok(());
+    }
+
+    // Check if the target port is already in use before attempting to spawn
+    let bind_addr: std::net::SocketAddr = format!("{}:{}", target_listen, target_port)
+        .parse()
+        .with_context(|| format!("Invalid address {}:{}", target_listen, target_port))?;
+
+    if let Err(e) = std::net::TcpListener::bind(bind_addr) {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            eprintln!("❌ Port {} is already in use by another process on {}.", target_port, target_listen);
+            eprintln!("💡 You can choose a different port using:");
+            eprintln!("   agentgate start --port <PORT>");
+            eprintln!("   or set: export AGENTGATE_PORT=<PORT>");
+            bail!("Port conflict: {} is already in use", target_port);
+        } else {
+            eprintln!("❌ Cannot bind to {}:{}: {}", target_listen, target_port, e);
+            bail!("Cannot bind: {}", e);
+        }
+    }
+
+    let exe = std::env::current_exe().context("Failed to get current executable path")?;
+    let log_file = config.logs_dir.join("daemon.log");
+    let out_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+        .with_context(|| format!("Failed to open daemon log at {:?}", log_file))?;
+    let err_file = out_file.try_clone()?;
+
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("serve");
+    cmd.arg("--listen").arg(&target_listen);
+    cmd.arg("--port").arg(target_port.to_string());
+    if args.no_tls {
+        cmd.arg("--no-tls");
+    }
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(out_file);
+    cmd.stderr(err_file);
+
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+
+    let mut child = cmd.spawn().context("Failed to spawn background daemon")?;
+    let pid = child.id() as i32;
+
+    fs::write(&config.pid_file, pid.to_string())
+        .with_context(|| format!("Failed to write PID file {:?}", config.pid_file))?;
+
+    std::thread::sleep(std::time::Duration::from_millis(600));
+
+    // Verify child process didn't immediately crash or exit
+    if let Ok(Some(status)) = child.try_wait() {
+        let _ = fs::remove_file(&config.pid_file);
+        let log_tail = fs::read_to_string(&log_file).unwrap_or_default();
+        let last_lines: Vec<&str> = log_tail.lines().rev().take(6).collect();
+        eprintln!("❌ AgentGate daemon failed to start (exit status: {}).", status);
+        if !last_lines.is_empty() {
+            eprintln!("   Error details from log ({}):", log_file.display());
+            for line in last_lines.iter().rev() {
+                eprintln!("     {}", line);
+            }
+        }
+        bail!("Daemon exited immediately after startup");
+    }
+
+    let protocol = if args.no_tls { "http" } else { "https" };
+    println!("🟢 AgentGate daemon started in background (PID: {})", pid);
+    println!("   Listening on: {}://{}:{}", protocol, target_listen, target_port);
+    println!("   Daemon logs:  {}", log_file.display());
+    println!("   Execute with: agentgate exec <command>");
+    println!("   Stop anytime: agentgate stop");
+
+    Ok(())
+}
+
+pub fn handle_stop(config: &AgentGateConfig) -> Result<()> {
+    let Some(pid) = read_pid(&config.pid_file) else {
+        println!("⚪ AgentGate daemon is not running.");
+        return Ok(());
+    };
+
+    println!("Stopping AgentGate daemon (PID: {})...", pid);
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+    }
+
+    let start = std::time::Instant::now();
+    while std::time::Instant::now().duration_since(start).as_secs() < 5 {
+        if unsafe { libc::kill(pid, 0) != 0 } {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    if unsafe { libc::kill(pid, 0) == 0 } {
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+
+    let _ = fs::remove_file(&config.pid_file);
+    println!("🛑 AgentGate daemon stopped.");
+
+    Ok(())
+}
+
+pub fn handle_restart(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
+    handle_stop(config)?;
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    handle_start(args, config)?;
+    Ok(())
+}
+
+pub fn handle_status(args: StatusArgs, config: &AgentGateConfig) -> Result<()> {
+    let pid_opt = read_pid(&config.pid_file);
+    let target_host = args.host.unwrap_or_else(|| config.listen_addr.clone());
+    let target_port = args
+        .port
+        .or_else(|| pid_opt.and_then(get_process_port))
+        .unwrap_or(config.listen_port);
+
+    println!("==========================================================");
+    println!("             🚪 AgentGate Daemon Status");
+    println!("==========================================================");
+
+    if let Some(pid) = pid_opt {
+        println!("Daemon:        🟢 RUNNING (PID: {})", pid);
+    } else {
+        let addr = format!("{}:{}", target_host, target_port);
+        let port_open = std::net::TcpStream::connect_timeout(
+            &addr.parse().unwrap_or_else(|_| "127.0.0.1:7991".parse().unwrap()),
+            std::time::Duration::from_millis(500),
+        )
+        .is_ok();
+
+        if port_open {
+            println!("Daemon:        🟢 RUNNING (Foreground or systemd)");
+        } else {
+            println!("Daemon:        🔴 STOPPED");
+            println!("Start daemon:  agentgate start");
+            println!("==========================================================");
+            return Ok(());
+        }
+    }
+
+    println!("Listening:     https://{}:{}", target_host, target_port);
+    println!("Config Dir:    {}", config.config_dir.display());
+    println!("PID File:      {}", config.pid_file.display());
+    println!("Daemon Log:    {}", config.logs_dir.join("daemon.log").display());
+
+    let policy_store = PolicyStore::load(&config.policies_dir).ok();
+    let policies_count = policy_store.map(|ps| ps.list().len()).unwrap_or(0);
+    let token_store = TokenStore::load(&config.tokens_file).ok();
+    let tokens_count = token_store.map(|ts| ts.list().len()).unwrap_or(0);
+
+    println!("Policies:      {} loaded", policies_count);
+    println!("Tokens:        {} configured", tokens_count);
+
+    if let Ok(Some(client_cfg)) = crate::client::load_client_config() {
+        let masked = if client_cfg.token.len() > 10 {
+            format!("{}...{}", &client_cfg.token[..6], &client_cfg.token[client_cfg.token.len() - 4..])
+        } else {
+            "***".to_string()
+        };
+        println!("Client CLI:    🟢 Configured ({}, {})", client_cfg.server, masked);
+    } else {
+        println!("Client CLI:    ⚪ Not logged in (run 'agentgate login')");
+    }
+
+    println!("==========================================================");
 
     Ok(())
 }
@@ -286,13 +596,18 @@ pub fn handle_token(cmd: TokenSubcommand, config: &AgentGateConfig) -> Result<()
             println!("TOKEN:      {}", raw_token);
             println!("----------------------------------------------------------------------");
             println!("⚠️  Save this token now! It will NOT be shown again.");
-            println!("\nExample cURL for your AI agent:");
+            println!("\n🚀 Quick Agent Login (like gh auth login):");
+            println!("  agentgate login --token {}", raw_token);
+            println!("\nThen execute commands effortlessly without passwords or token wastage:");
+            println!("  agentgate exec uptime");
+            println!("  agentgate exec systemctl restart nginx");
+            println!("\nOr use with cURL if preferred:");
             println!(
-                "curl -k -X POST https://127.0.0.1:7991/v1/exec \\\n  \
+                "curl -k -X POST https://{}:{}/v1/exec \\\n  \
                 -H \"Authorization: Bearer {}\" \\\n  \
                 -H \"Content-Type: application/json\" \\\n  \
                 -d '{{\"command\": \"uptime\"}}'\n",
-                raw_token
+                config.listen_addr, config.listen_port, raw_token
             );
         }
         TokenSubcommand::List => {

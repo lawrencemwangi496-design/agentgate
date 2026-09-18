@@ -79,12 +79,26 @@ pub async fn run_server(
         .route("/v1/health", get(health_handler))
         .route("/v1/exec", post(exec_handler))
         .layer(cors)
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024)) // 64KB max request body — blocks large payload exhaustion
+        .layer(tower::limit::ConcurrencyLimitLayer::new(128)) // 128 concurrent connection limit — blocks bot DDoS hammering
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", config.listen_addr, config.listen_port)
         .parse()
         .context("Invalid listen address or port")?;
+
+    // Check port availability before binding for crystal clear error messages
+    if let Err(e) = std::net::TcpListener::bind(addr) {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            anyhow::bail!(
+                "Port {} is already in use by another process on {}.\n💡 Change the port using: agentgate start --port <PORT>\n   or set: export AGENTGATE_PORT=<PORT>",
+                config.listen_port, config.listen_addr
+            );
+        } else {
+            anyhow::bail!("Cannot bind to {}: {}", addr, e);
+        }
+    }
 
     if use_tls {
         let (cert_path, key_path) = match (custom_cert, custom_key) {

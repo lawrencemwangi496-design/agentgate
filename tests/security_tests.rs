@@ -141,3 +141,38 @@ fn test_duration_parsing_flexibility() {
     assert!(parse_duration("invalid").is_err());
     assert!(parse_duration("-5h").is_err());
 }
+
+#[test]
+fn test_client_config_serialization() {
+    use agentgate::client::ClientConfig;
+
+    let cfg = ClientConfig {
+        server: "https://127.0.0.1:8991".to_string(),
+        token: "ag_1234567890abcdef1234567890abcdef".to_string(),
+        insecure_tls: true,
+    };
+
+    let yaml = serde_yaml::to_string(&cfg).expect("Should serialize to YAML");
+    assert!(yaml.contains("https://127.0.0.1:8991"));
+    assert!(yaml.contains("ag_1234567890abcdef1234567890abcdef"));
+
+    let parsed: ClientConfig = serde_yaml::from_str(&yaml).expect("Should deserialize");
+    assert_eq!(parsed.server, cfg.server);
+    assert_eq!(parsed.token, cfg.token);
+    assert!(parsed.insecure_tls);
+}
+
+#[test]
+fn test_port_binding_and_conflict_detection() {
+    // Bind a listener on an ephemeral port
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+    let port = listener.local_addr().unwrap().port();
+
+    // Attempting to bind the same port should immediately return AddrInUse
+    let second_bind = std::net::TcpListener::bind(format!("127.0.0.1:{}", port));
+    assert!(second_bind.is_err(), "Expected port {} to be in use", port);
+    if let Err(e) = second_bind {
+        assert_eq!(e.kind(), std::io::ErrorKind::AddrInUse);
+    }
+}
+

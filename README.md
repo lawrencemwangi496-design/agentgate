@@ -53,25 +53,36 @@ TOKEN:      ag_9a8b7c6d5e4f...
 
 ### 3. Start the Daemon
 ```bash
-agentgate serve
+agentgate start
 ```
-Listens securely on `https://127.0.0.1:7991`.
-
-### 4. Send Commands from AI Agent
+Starts securely in the background like `tailscale up`. Listens on `https://127.0.0.1:7991`.
+To customize the port:
 ```bash
-curl -k -X POST https://127.0.0.1:7991/v1/exec \
-  -H "Authorization: Bearer ag_9a8b7c6d5e4f..." \
-  -H "Content-Type: application/json" \
-  -d '{"command": "uptime"}'
+agentgate start --port 8991
+# or set in ~/.config/agentgate/config.yaml or AGENTGATE_PORT=8991
 ```
-Response:
-```json
-{
-  "exit_code": 0,
-  "stdout": " 14:00:00 up 1 hour, 1 user, load average: 1.20, 1.45, 1.10\n",
-  "stderr": "",
-  "duration_ms": 4
-}
+*If a port conflict occurs, AgentGate detects it immediately and suggests alternative ports.*
+
+### 4. Client Login & Instant Execution (Like `gh`)
+Instead of wasting LLM prompt tokens typing long, brittle `curl` commands:
+
+```bash
+# Authenticate the agent once (credentials saved with 0600 permissions)
+agentgate login --token ag_9a8b7c6d5e4f...
+
+# Run authorized commands directly!
+agentgate exec uptime
+agentgate exec systemctl status nginx
+agentgate exec "docker ps"
+```
+Stdout and stderr stream directly, remote exit codes are forwarded (0 on success, 126 on policy denial), and agent tokens are not exposed in process arguments.
+
+### 5. Check Status or Stop Anytime
+```bash
+agentgate status    # Shows live daemon PID, port, policies, and client login state
+agentgate stop      # Cleanly stops the background daemon (like tailscale down)
+agentgate guide     # Outputs ready-to-use prompt guidelines for AI agents
+agentgate mcp       # Runs built-in Model Context Protocol (MCP) server for native tool calls
 ```
 
 ---
@@ -79,44 +90,36 @@ Response:
 ## Security in Action
 
 ### 1. Blocked Unauthorized Command
-If the agent attempts to inspect `/etc/shadow`:
+If the agent attempts to run an unlisted command:
 ```bash
-curl -k -X POST https://127.0.0.1:7991/v1/exec \
-  -H "Authorization: Bearer ag_..." \
-  -H "Content-Type: application/json" \
-  -d '{"command": "cat /etc/shadow"}'
+agentgate exec cat /etc/shadow
 ```
-Response:
-```json
-{
-  "error": "command_denied",
-  "message": "command 'cat /etc/shadow' is not allowed by policy 'read-only'",
-  "exit_code": -1
-}
+Output:
+```text
+❌ AgentGate Policy Denied: command 'cat /etc/shadow' is not allowed by policy 'read-only'
 ```
 
 ### 2. Blocked Shell Injection Attempt
-If an attacker or prompt injection tricks the agent into command chaining:
+If an attacker or prompt injection attempts command chaining:
 ```bash
-curl -k -X POST https://127.0.0.1:7991/v1/exec \
-  -H "Authorization: Bearer ag_..." \
-  -H "Content-Type: application/json" \
-  -d '{"command": "uptime; rm -rf /"}'
+agentgate exec "uptime; rm -rf /"
 ```
-Response:
-```json
-{
-  "error": "injection_blocked",
-  "message": "command contains disallowed shell metacharacter: ';'",
-  "exit_code": -1
-}
+Output:
+```text
+❌ AgentGate Injection Blocked: command contains disallowed shell metacharacter: ';'
 ```
 
-### 3. Instant Revocation
+### 3. DDoS & Hammering Protections
+- **Localhost Default:** Binds to `127.0.0.1` by default, invisible to outside networks.
+- **Request Body Limit:** Hard limit of 64KB on request bodies prevents buffer exhaustion.
+- **Concurrency Rate Limiting:** Built-in connection throttle (128 max concurrent requests) shields system resources from hammering.
+- **Constant-Time Verification:** Token comparison runs in constant-time (`subtle::ConstantTimeEq`), rejecting unauthorized requests with 0 subprocess spawns.
+
+### 4. Instant Revocation
 ```bash
 agentgate token revoke my-claude-agent
 ```
-Any subsequent request is immediately returned `401 Unauthorized`.
+Any subsequent request is immediately rejected with `401 Unauthorized`.
 
 ---
 

@@ -8,27 +8,64 @@ use tracing::info;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentGateConfig {
     pub config_dir: PathBuf,
+    pub config_file: PathBuf,
+    pub client_file: PathBuf,
     pub policies_dir: PathBuf,
     pub tokens_file: PathBuf,
     pub certs_dir: PathBuf,
     pub logs_dir: PathBuf,
+    pub pid_file: PathBuf,
     pub listen_addr: String,
     pub listen_port: u16,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+struct DaemonConfigFile {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listen: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
 }
 
 impl AgentGateConfig {
     /// Load config, creating directories if needed
     pub fn load() -> Result<Self> {
         let config_dir = Self::get_config_dir()?;
+        let config_file = config_dir.join("config.yaml");
+        let client_file = config_dir.join("client.yaml");
+
+        let mut listen_addr = "127.0.0.1".to_string();
+        let mut listen_port = 7991u16;
+
+        // 1. Read from config.yaml if present
+        if let Ok(Some(parsed)) = fs::read_to_string(&config_file).map(|c| serde_yaml::from_str::<DaemonConfigFile>(&c).ok()) {
+            if let Some(l) = parsed.listen {
+                listen_addr = l;
+            }
+            if let Some(p) = parsed.port {
+                listen_port = p;
+            }
+        }
+
+        // 2. Override from environment variables if set
+        if let Some(env_listen) = std::env::var("AGENTGATE_LISTEN").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+            listen_addr = env_listen;
+        }
+        if let Some(p) = std::env::var("AGENTGATE_PORT").ok().and_then(|p| p.trim().parse::<u16>().ok()) {
+            listen_port = p;
+        }
 
         let config = Self {
             policies_dir: config_dir.join("policies"),
             tokens_file: config_dir.join("tokens.yaml"),
             certs_dir: config_dir.join("certs"),
             logs_dir: config_dir.join("logs"),
+            pid_file: config_dir.join("agentgate.pid"),
+            config_file,
+            client_file,
             config_dir,
-            listen_addr: "127.0.0.1".to_string(),
-            listen_port: 7991,
+            listen_addr,
+            listen_port,
         };
 
         // Create directories if needed
@@ -41,22 +78,45 @@ impl AgentGateConfig {
     }
 
     /// Initialize first-time setup (create dirs, default config)
-    pub fn init() -> Result<Self> {
-        let config = Self::load()?;
+    pub fn init(initial_port: Option<u16>, initial_listen: Option<String>) -> Result<Self> {
+        let mut config = Self::load()?;
+
+        if let Some(p) = initial_port {
+            config.listen_port = p;
+        }
+        if let Some(l) = initial_listen {
+            config.listen_addr = l;
+        }
+
+        // Write default config.yaml if not already present
+        if !config.config_file.exists() {
+            let yaml_content = format!(
+                "# AgentGate Daemon Configuration\n\
+                 # Address to bind to (use \"127.0.0.1\" for local machine, \"0.0.0.0\" for network access)\n\
+                 listen: \"{}\"\n\n\
+                 # Port to listen on (default: 7991). Change this if port 7991 is used by another service.\n\
+                 port: {}\n",
+                config.listen_addr, config.listen_port
+            );
+            fs::write(&config.config_file, yaml_content)
+                .with_context(|| format!("Failed to write config file {:?}", config.config_file))?;
+        }
         
         info!("Initialized AgentGate configuration at {}", config.config_dir.display());
         info!("Created directory: {}", config.policies_dir.display());
         info!("Created directory: {}", config.certs_dir.display());
         info!("Created directory: {}", config.logs_dir.display());
+        info!("Configuration file: {}", config.config_file.display());
         info!("Tokens file expected at: {}", config.tokens_file.display());
         
-        // Also print to stdout as requested for init commands
+        // Print user-friendly setup confirmation
         println!("Initialized AgentGate configuration at {}", config.config_dir.display());
-        println!("Created directories:");
-        println!("  - {}", config.policies_dir.display());
-        println!("  - {}", config.certs_dir.display());
-        println!("  - {}", config.logs_dir.display());
-        println!("Tokens file expected at: {}", config.tokens_file.display());
+        println!("  - Config file: {}", config.config_file.display());
+        println!("  - Policies:    {}", config.policies_dir.display());
+        println!("  - Certs:       {}", config.certs_dir.display());
+        println!("  - Logs:        {}", config.logs_dir.display());
+        println!("  - Tokens:      {}", config.tokens_file.display());
+        println!("  - Listen Port: {}", config.listen_port);
 
         Ok(config)
     }

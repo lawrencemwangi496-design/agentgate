@@ -1,0 +1,632 @@
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
+
+/// Saved client credentials configuration
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClientConfig {
+    pub server: String,
+    pub token: String,
+    #[serde(default = "default_insecure")]
+    pub insecure_tls: bool,
+}
+
+fn default_insecure() -> bool {
+    true
+}
+
+/// Locate client configuration file path (~/.config/agentgate/client.yaml)
+pub fn client_config_path() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("Could not find home directory")?;
+    Ok(home.join(".config").join("agentgate").join("client.yaml"))
+}
+
+/// Load client configuration from file, falling back to environment variables
+pub fn load_client_config() -> Result<Option<ClientConfig>> {
+    let env_token = std::env::var("AGENTGATE_TOKEN").ok();
+    let env_server = std::env::var("AGENTGATE_SERVER").ok();
+
+    let file_path = client_config_path()?;
+    if file_path.exists() {
+        let content = fs::read_to_string(&file_path)
+            .with_context(|| format!("Failed to read client config from {:?}", file_path))?;
+        let mut cfg: ClientConfig = serde_yaml::from_str(&content)
+            .with_context(|| "Failed to parse client config yaml")?;
+
+        // Env vars override file config if present
+        if let Some(s) = env_server.as_deref().filter(|s| !s.trim().is_empty()) {
+            cfg.server = s.trim().to_string();
+        }
+        if let Some(t) = env_token.as_deref().filter(|t| !t.trim().is_empty()) {
+            cfg.token = t.trim().to_string();
+        }
+
+        return Ok(Some(cfg));
+    }
+
+    // If no file, check if environment variables are set
+    if let Some(token) = env_token.filter(|t| !t.trim().is_empty()) {
+        let server = env_server
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "https://127.0.0.1:7991".to_string());
+        return Ok(Some(ClientConfig {
+            server,
+            token: token.trim().to_string(),
+            insecure_tls: true,
+        }));
+    }
+
+    Ok(None)
+}
+
+/// Save client configuration with safe permissions (0600)
+pub fn save_client_config(server: &str, token: &str, insecure_tls: bool) -> Result<PathBuf> {
+    let file_path = client_config_path()?;
+    if let Some(parent) = file_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create client config dir {:?}", parent))?;
+    }
+
+    let cfg = ClientConfig {
+        server: server.trim_end_matches('/').to_string(),
+        token: token.trim().to_string(),
+        insecure_tls,
+    };
+
+    let yaml = serde_yaml::to_string(&cfg)?;
+    fs::write(&file_path, yaml)
+        .with_context(|| format!("Failed to write client config to {:?}", file_path))?;
+
+    // On Unix, restrict permissions to 0600 (owner read/write only)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&file_path)?.permissions();
+        perms.set_mode(0o600);
+        let _ = fs::set_permissions(&file_path, perms);
+    }
+
+    Ok(file_path)
+}
+
+/// Handle `agentgate login`
+pub async fn handle_login(server: String, token_opt: Option<String>, insecure: bool) -> Result<()> {
+    let clean_server = server.trim_end_matches('/').to_string();
+
+    let raw_token = match token_opt {
+        Some(t) => t.trim().to_string(),
+        None => {
+            print!("Enter AgentGate Token (starts with ag_): ");
+            io::stdout().flush()?;
+            let mut line = String::new();
+            io::stdin().lock().read_line(&mut line)?;
+            line.trim().to_string()
+        }
+    };
+
+    if raw_token.is_empty() {
+        anyhow::bail!("Token cannot be empty.");
+    }
+
+    if !raw_token.starts_with("ag_") {
+        eprintln!("⚠️ Warning: AgentGate tokens usually start with 'ag_'.");
+    }
+
+    println!("Connecting to AgentGate server at {}...", clean_server);
+
+    // Verify server connectivity
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(insecure)
+        .timeout(std::time::Duration::from_secs(5))
+        .build()?;
+
+    let health_url = format!("{}/health", clean_server);
+    match client.get(&health_url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            // Server is reachable
+        }
+        Ok(resp) => {
+            eprintln!(
+                "⚠️ Warning: Server responded with status {} at {}",
+                resp.status(),
+                health_url
+            );
+        }
+        Err(e) => {
+            eprintln!("⚠️ Warning: Could not reach server at {}: {}", health_url, e);
+            eprintln!("   Saving credentials anyway so you can use them when the daemon starts.");
+        }
+    }
+
+    let saved_path = save_client_config(&clean_server, &raw_token, insecure)?;
+
+    let masked_token = if raw_token.len() > 10 {
+        format!("{}...{}", &raw_token[..6], &raw_token[raw_token.len() - 4..])
+    } else {
+        "***".to_string()
+    };
+
+    println!("\n✅ Authenticated successfully!");
+    println!("----------------------------------------------------------------------");
+    println!("SERVER:       {}", clean_server);
+    println!("TOKEN:        {}", masked_token);
+    println!("CONFIG FILE:  {}", saved_path.display());
+    println!("----------------------------------------------------------------------");
+    println!("🚀 You can now run commands directly without passwords or long cURL:");
+    println!("   agentgate exec uptime");
+    println!("   agentgate exec systemctl status nginx");
+    println!("   agentgate exec \"docker ps\"\n");
+
+    Ok(())
+}
+
+/// Handle `agentgate logout`
+pub fn handle_logout() -> Result<()> {
+    let file_path = client_config_path()?;
+    if file_path.exists() {
+        fs::remove_file(&file_path)
+            .with_context(|| format!("Failed to delete client config at {:?}", file_path))?;
+        println!("🚪 Logged out. Removed client credentials from {}", file_path.display());
+    } else {
+        println!("⚪ Not currently logged in (no client credentials file found).");
+    }
+    Ok(())
+}
+
+/// Handle `agentgate whoami`
+pub async fn handle_whoami() -> Result<()> {
+    let cfg = match load_client_config()? {
+        Some(c) => c,
+        None => {
+            println!("❌ Not logged in.");
+            println!("💡 Run 'agentgate login --token <TOKEN>' or set AGENTGATE_TOKEN=<TOKEN>");
+            return Ok(());
+        }
+    };
+
+    let masked_token = if cfg.token.len() > 10 {
+        format!("{}...{}", &cfg.token[..6], &cfg.token[cfg.token.len() - 4..])
+    } else {
+        "***".to_string()
+    };
+
+    println!("==========================================================");
+    println!("               🔑 AgentGate Client Status");
+    println!("==========================================================");
+    println!("Server:        {}", cfg.server);
+    println!("Token:         {}", masked_token);
+
+    // Test connectivity
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(cfg.insecure_tls)
+        .timeout(std::time::Duration::from_secs(3))
+        .build()?;
+
+    let health_url = format!("{}/health", cfg.server);
+    match client.get(&health_url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            println!("Status:        🟢 Connected (Server Online)");
+        }
+        Ok(resp) => {
+            println!("Status:        ⚠️ Connected (Server returned {})", resp.status());
+        }
+        Err(_) => {
+            println!("Status:        🔴 Offline / Unreachable");
+            println!("               💡 Make sure the daemon is started: agentgate start");
+        }
+    }
+
+    if let Some(p) = client_config_path().ok().filter(|p| p.exists()) {
+        println!("Config Path:   {}", p.display());
+    }
+    println!("==========================================================");
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct ServerExecResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct ServerErrorResponse {
+    #[serde(default)]
+    pub error: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub exit_code: i32,
+}
+
+/// Handle `agentgate exec <COMMAND...>`
+pub async fn handle_exec(
+    command_args: Vec<String>,
+    server_override: Option<String>,
+    token_override: Option<String>,
+    json_mode: bool,
+    quiet: bool,
+) -> Result<()> {
+    let command_str = command_args.join(" ");
+    let command_str = command_str.trim();
+
+    if command_str.is_empty() {
+        eprintln!("❌ No command provided to execute.");
+        eprintln!("💡 Usage: agentgate exec <command> [args...]");
+        eprintln!("   Example: agentgate exec uptime");
+        eprintln!("   Example: agentgate exec systemctl restart nginx");
+        std::process::exit(1);
+    }
+
+    let saved_cfg = load_client_config()?.unwrap_or_else(|| ClientConfig {
+        server: "https://127.0.0.1:7991".to_string(),
+        token: String::new(),
+        insecure_tls: true,
+    });
+
+    let server_url = server_override
+        .or_else(|| std::env::var("AGENTGATE_SERVER").ok())
+        .unwrap_or(saved_cfg.server)
+        .trim_end_matches('/')
+        .to_string();
+
+    let token = token_override
+        .or_else(|| std::env::var("AGENTGATE_TOKEN").ok())
+        .unwrap_or(saved_cfg.token);
+
+    if token.trim().is_empty() {
+        eprintln!("❌ Authentication required: No token found.");
+        eprintln!("💡 Log in first using:");
+        eprintln!("   agentgate login --token <TOKEN>");
+        eprintln!("   or set AGENTGATE_TOKEN=<TOKEN>");
+        eprintln!("   or pass --token <TOKEN>");
+        std::process::exit(1);
+    }
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(saved_cfg.insecure_tls)
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .context("Failed to build HTTP client")?;
+
+    let exec_url = format!("{}/v1/exec", server_url);
+
+    let resp = match client
+        .post(&exec_url)
+        .header("Authorization", format!("Bearer {}", token.trim()))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "command": command_str }))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            if !quiet {
+                eprintln!("❌ Could not connect to AgentGate server at {}: {}", server_url, e);
+                eprintln!("💡 Is the AgentGate daemon running? Start it with: agentgate start");
+            }
+            std::process::exit(1);
+        }
+    };
+
+    let status = resp.status();
+
+    if status.is_success() {
+        let text = resp.text().await.context("Failed to read server response body")?;
+        if json_mode {
+            println!("{}", text);
+            return Ok(());
+        }
+
+        match serde_json::from_str::<ServerExecResponse>(&text) {
+            Ok(res) => {
+                if !res.stdout.is_empty() {
+                    print!("{}", res.stdout);
+                }
+                if !res.stderr.is_empty() {
+                    eprint!("{}", res.stderr);
+                }
+                if res.truncated && !quiet {
+                    eprintln!("\n⚠️ Note: Command output was truncated to the 5MB safety limit.");
+                }
+                std::process::exit(res.exit_code);
+            }
+            Err(_) => {
+                // If parsing fails, just output raw text
+                print!("{}", text);
+                return Ok(());
+            }
+        }
+    }
+
+    let text = resp.text().await.unwrap_or_default();
+    let err_msg = if let Ok(err_obj) = serde_json::from_str::<ServerErrorResponse>(&text) {
+        err_obj.message
+    } else {
+        text
+    };
+
+    match status.as_u16() {
+        400 => {
+            if !quiet {
+                eprintln!("❌ AgentGate Injection Blocked: {}", err_msg);
+            }
+            std::process::exit(126);
+        }
+        403 => {
+            if !quiet {
+                eprintln!("❌ AgentGate Policy Denied: {}", err_msg);
+            }
+            std::process::exit(126);
+        }
+        401 => {
+            if !quiet {
+                eprintln!("❌ AgentGate Unauthorized: Invalid or expired token.");
+                eprintln!("💡 Update your token using: agentgate login --token <TOKEN>");
+            }
+            std::process::exit(1);
+        }
+        _ => {
+            if !quiet {
+                eprintln!("❌ AgentGate Error (HTTP {}): {}", status, err_msg);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Print comprehensive prompt rules and documentation for AI Agents
+pub fn handle_guide() -> Result<()> {
+    let guide = r#"# 🚪 AgentGate: AI Agent Execution Guide
+
+AgentGate is a secure privilege bridge that allows you (the AI agent) to execute authorized system administration commands safely without needing sudo passwords or unrestricted shell access.
+
+## Quick Start for Agents
+
+Once authenticated via `agentgate login` (or with `AGENTGATE_TOKEN` set), run any permitted command directly using:
+
+```bash
+agentgate exec <command>
+```
+
+### Examples
+```bash
+# Check server status and diagnostics
+agentgate exec uptime
+agentgate exec df -h
+agentgate exec free -m
+
+# Manage services
+agentgate exec systemctl status nginx
+agentgate exec systemctl restart nginx
+agentgate exec journalctl -u nginx -n 50
+
+# Manage Docker containers
+agentgate exec docker ps
+agentgate exec docker restart app
+agentgate exec docker logs --tail 50 app
+```
+
+## Critical Rules for Agents
+
+1. **NO `sudo` needed**: Do NOT prepend `sudo`. AgentGate daemon already executes authorized commands with appropriate privileges.
+2. **NO Shell Metacharacters / Chaining**:
+   - Do NOT chain commands with `;`, `&&`, `||`, or `|`.
+   - Run each command separately as individual `agentgate exec` calls.
+   - Do NOT use command substitution like `$(...)` or backticks.
+3. **Arguments with spaces**:
+   - You can pass quoted arguments normally: `agentgate exec journalctl -u "nginx" -n 50`
+   - Direct argument lists work cleanly: `agentgate exec systemctl restart nginx`
+4. **Environment Variables**:
+   - You can authenticate globally in your subshell by setting:
+     `export AGENTGATE_TOKEN="ag_..."`
+     `export AGENTGATE_SERVER="https://127.0.0.1:7991"`
+5. **Output Format**:
+   - Stdout and Stderr are streamed directly to your terminal.
+   - Return codes match the remote process exit code (0 for success).
+   - If a command is forbidden by policy, exit code is 126.
+   - For JSON output (e.g. execution duration), use: `agentgate exec --json <command>`
+
+## Client Commands Reference
+- `agentgate login --token <TOKEN>` : Save agent credentials locally
+- `agentgate whoami`               : Check authentication and server status
+- `agentgate exec <command>`        : Execute an allowed system command
+- `agentgate logout`               : Remove local credentials
+- `agentgate mcp`                  : Run as a Model Context Protocol (MCP) server
+"#;
+
+    println!("{}", guide);
+    Ok(())
+}
+
+/// Run AgentGate as a Model Context Protocol (MCP) server over stdin/stdout
+pub async fn handle_mcp() -> Result<()> {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+
+    let saved_cfg = load_client_config()?.unwrap_or_else(|| ClientConfig {
+        server: "https://127.0.0.1:7991".to_string(),
+        token: String::new(),
+        insecure_tls: true,
+    });
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(saved_cfg.insecure_tls)
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .context("Failed to build HTTP client for MCP")?;
+
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let parsed: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let id = parsed.get("id").cloned();
+        let method = parsed.get("method").and_then(|m| m.as_str()).unwrap_or("");
+
+        match method {
+            "initialize" => {
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {
+                            "tools": {}
+                        },
+                        "serverInfo": {
+                            "name": "agentgate-mcp",
+                            "version": env!("CARGO_PKG_VERSION")
+                        }
+                    }
+                });
+                writeln!(stdout, "{}", resp)?;
+                stdout.flush()?;
+            }
+            "notifications/initialized" => {
+                // Client initialized acknowledgment
+            }
+            "tools/list" => {
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "tools": [
+                            {
+                                "name": "agentgate_exec",
+                                "description": "Execute a permitted system command via AgentGate daemon without sudo passwords",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "command": {
+                                            "type": "string",
+                                            "description": "The command string to execute (e.g. 'uptime', 'systemctl restart nginx')"
+                                        }
+                                    },
+                                    "required": ["command"]
+                                }
+                            }
+                        ]
+                    }
+                });
+                writeln!(stdout, "{}", resp)?;
+                stdout.flush()?;
+            }
+            "tools/call" => {
+                let params = parsed.get("params");
+                let tool_name = params.and_then(|p| p.get("name")).and_then(|n| n.as_str()).unwrap_or("");
+                let cmd_str = params
+                    .and_then(|p| p.get("arguments"))
+                    .and_then(|a| a.get("command"))
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("");
+
+                if tool_name == "agentgate_exec" {
+                    let exec_url = format!("{}/v1/exec", saved_cfg.server.trim_end_matches('/'));
+                    let api_resp = client
+                        .post(&exec_url)
+                        .header("Authorization", format!("Bearer {}", saved_cfg.token))
+                        .header("Content-Type", "application/json")
+                        .json(&serde_json::json!({ "command": cmd_str }))
+                        .send()
+                        .await;
+
+                    match api_resp {
+                        Ok(res) if res.status().is_success() => {
+                            let text = res.text().await.unwrap_or_default();
+                            let exec_res: Result<ServerExecResponse, _> = serde_json::from_str(&text);
+                            let content_text = match exec_res {
+                                Ok(er) => {
+                                    if er.stderr.is_empty() {
+                                        er.stdout
+                                    } else if er.stdout.is_empty() {
+                                        er.stderr
+                                    } else {
+                                        format!("STDOUT:\n{}\nSTDERR:\n{}", er.stdout, er.stderr)
+                                    }
+                                }
+                                Err(_) => text,
+                            };
+
+                            let mcp_resp = serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": content_text
+                                        }
+                                    ],
+                                    "isError": false
+                                }
+                            });
+                            writeln!(stdout, "{}", mcp_resp)?;
+                            stdout.flush()?;
+                        }
+                        Ok(res) => {
+                            let err_text = res.text().await.unwrap_or_default();
+                            let mcp_resp = serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": format!("AgentGate Error: {}", err_text)
+                                        }
+                                    ],
+                                    "isError": true
+                                }
+                            });
+                            writeln!(stdout, "{}", mcp_resp)?;
+                            stdout.flush()?;
+                        }
+                        Err(e) => {
+                            let mcp_resp = serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": format!("Connection Error: {}", e)
+                                        }
+                                    ],
+                                    "isError": true
+                                }
+                            });
+                            writeln!(stdout, "{}", mcp_resp)?;
+                            stdout.flush()?;
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Ignore unknown methods or send generic method not found
+            }
+        }
+    }
+
+    Ok(())
+}
