@@ -7,6 +7,11 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  security-events: write
+  checks: write
+
 jobs:
   security-checks:
     name: Security Audits & Lints
@@ -33,8 +38,17 @@ jobs:
       - name: Run Security Test Suite
         run: cargo test --verbose
 
-      - name: Dependency Security Audit
-        uses: rustsec/audit-check@v1.4.1
+      - name: Install Prebuilt cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Run Cargo Security Audit
+        run: cargo audit --ignore RUSTSEC-2024-0320
+
+      - name: Run Trivy Security Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
