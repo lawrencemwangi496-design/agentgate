@@ -2,9 +2,8 @@
 set -e
 
 REPO="lawrencemwangi496-design/agentgate"
-VERSION="v0.1.0"
 TAR_NAME="agentgate-linux-x86_64.tar.gz"
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TAR_NAME}"
+DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${TAR_NAME}"
 
 echo ""
 echo "=========================================================="

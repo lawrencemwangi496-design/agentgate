@@ -103,6 +103,51 @@ pub async fn run_server(
         }
     }
 
+    // Background auto-updater: checks GitHub releases every 30 minutes and updates automatically
+    tokio::spawn(async move {
+        let client = match reqwest::Client::builder()
+            .user_agent("AgentGate-AutoUpdater")
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        // Wait 2 minutes after boot before checking
+        tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
+
+        loop {
+            if let Ok(res) = client
+                .get("https://api.github.com/repos/lawrencemwangi496-design/agentgate/releases/latest")
+                .send()
+                .await
+            {
+                if let Ok(json) = res.json::<serde_json::Value>().await {
+                    if let Some(tag) = json.get("tag_name").and_then(|t| t.as_str()) {
+                        let current_ver = format!("v{}", env!("CARGO_PKG_VERSION"));
+                        if tag != current_ver && !tag.is_empty() {
+                            tracing::info!(
+                                "🔄 New AgentGate release available: {} (current: {}). Auto-updating...",
+                                tag, current_ver
+                            );
+                            let status = std::process::Command::new("sh")
+                                .arg("-c")
+                                .arg("curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | bash")
+                                .status();
+                            if let Ok(s) = status {
+                                if s.success() {
+                                    tracing::info!("✅ AgentGate automatically updated to {}", tag);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(1800)).await;
+        }
+    });
+
     if use_tls {
         let (cert_path, key_path) = match (custom_cert, custom_key) {
             (Some(c), Some(k)) => (c, k),

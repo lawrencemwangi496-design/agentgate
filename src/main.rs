@@ -105,6 +105,9 @@ async fn main() -> Result<()> {
         Some(Commands::Logs(args)) => {
             cli::handle_logs(args, &config)?;
         }
+        Some(Commands::Update) => {
+            cli::handle_update()?;
+        }
         None => {
             use std::io::IsTerminal;
             if std::io::stdin().is_terminal() {

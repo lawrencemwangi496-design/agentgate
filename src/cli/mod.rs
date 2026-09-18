@@ -79,6 +79,10 @@ pub enum Commands {
 
     /// View audit logs of executed and blocked commands
     Logs(LogsArgs),
+
+    /// Update AgentGate to the latest release
+    #[command(alias = "upgrade")]
+    Update,
 }
 
 #[derive(Args, Clone, Default)]
@@ -348,7 +352,6 @@ struct AuditRow {
 // Embedded default starter policies
 const STARTER_READ_ONLY: &str = include_str!("../../policies/read-only.yaml");
 const STARTER_DOCKER: &str = include_str!("../../policies/docker-ops.yaml");
-const STARTER_WEBSERVER: &str = include_str!("../../policies/webserver-ops.yaml");
 
 pub fn detect_network_addresses(port: u16, protocol: &str) -> Vec<(&'static str, String)> {
     let mut addrs = Vec::new();
@@ -431,7 +434,6 @@ pub fn handle_init(args: InitArgs, config: &AgentGateConfig) -> Result<()> {
     let starters = [
         ("read-only.yaml", STARTER_READ_ONLY),
         ("docker-ops.yaml", STARTER_DOCKER),
-        ("webserver-ops.yaml", STARTER_WEBSERVER),
     ];
 
     for (fname, content) in starters {
@@ -517,7 +519,7 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
 
     if let Some(pid) = read_pid(&config.pid_file) {
         let active_port = get_process_port(pid).unwrap_or(config.listen_port);
-        println!("🟢 AgentGate daemon is already running (PID: {})", pid);
+        println!("🟢 AgentGate is already running (PID: {})", pid);
         println!("   Address: https://{}:{}", config.listen_addr, active_port);
         println!("   Stop with: agentgate stop");
         return Ok(());
@@ -550,7 +552,7 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
         .create(true)
         .append(true)
         .open(&log_file)
-        .with_context(|| format!("Failed to open daemon log at {:?}", log_file))?;
+        .with_context(|| format!("Failed to open log at {:?}", log_file))?;
     let err_file = out_file.try_clone()?;
 
     let mut cmd = std::process::Command::new(exe);
@@ -571,7 +573,7 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
         });
     }
 
-    let mut child = cmd.spawn().context("Failed to spawn background daemon")?;
+    let mut child = cmd.spawn().context("Failed to spawn background process")?;
     let pid = child.id() as i32;
 
     fs::write(&config.pid_file, pid.to_string())
@@ -585,7 +587,7 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
         let log_tail = fs::read_to_string(&log_file).unwrap_or_default();
         let last_lines: Vec<&str> = log_tail.lines().rev().take(6).collect();
         eprintln!(
-            "❌ AgentGate daemon failed to start (exit status: {}).",
+            "❌ AgentGate failed to start (exit status: {}).",
             status
         );
         if !last_lines.is_empty() {
@@ -594,11 +596,11 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
                 eprintln!("     {}", line);
             }
         }
-        bail!("Daemon exited immediately after startup");
+        bail!("Process exited immediately after startup");
     }
 
     let protocol = if args.no_tls { "http" } else { "https" };
-    println!("🟢 AgentGate daemon started in background (PID: {})", pid);
+    println!("🟢 AgentGate started in background (PID: {})", pid);
     println!(
         "   Listening on: {}://{}:{}",
         protocol, target_listen, target_port
@@ -627,7 +629,7 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
             println!("   Remote/Network:    {}/", url);
         }
     }
-    println!("\n   Daemon logs:  {}", log_file.display());
+    println!("\n   Logs:         {}", log_file.display());
     println!("   Execute with: agentgate exec <command>");
     println!("   Stop anytime: agentgate stop");
 
@@ -636,11 +638,11 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
 
 pub fn handle_stop(config: &AgentGateConfig) -> Result<()> {
     let Some(pid) = read_pid(&config.pid_file) else {
-        println!("⚪ AgentGate daemon is not running.");
+        println!("⚪ AgentGate is not running.");
         return Ok(());
     };
 
-    println!("Stopping AgentGate daemon (PID: {})...", pid);
+    println!("Stopping AgentGate (PID: {})...", pid);
     unsafe {
         libc::kill(pid, libc::SIGTERM);
     }
@@ -660,7 +662,7 @@ pub fn handle_stop(config: &AgentGateConfig) -> Result<()> {
     }
 
     let _ = fs::remove_file(&config.pid_file);
-    println!("🛑 AgentGate daemon stopped.");
+    println!("🛑 AgentGate stopped.");
 
     Ok(())
 }
@@ -758,6 +760,23 @@ pub fn handle_status(args: StatusArgs, config: &AgentGateConfig) -> Result<()> {
 
     println!("==========================================================");
 
+    Ok(())
+}
+
+pub fn handle_update() -> Result<()> {
+    println!("🔄 Checking for updates and installing latest AgentGate release...");
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | bash")
+        .status()
+        .context("Failed to execute update script")?;
+
+    if status.success() {
+        println!("✅ AgentGate updated successfully! Run 'agentgate --version' to verify.");
+    } else {
+        println!("⚠️  Update command returned non-zero status. You can update manually with:");
+        println!("   curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | bash");
+    }
     Ok(())
 }
 
@@ -1068,11 +1087,11 @@ pub async fn handle_main_menu(config: &AgentGateConfig) -> Result<()> {
             let port = get_process_port(pid).unwrap_or(config.listen_port);
             let host = get_process_listen(pid).unwrap_or_else(|| config.listen_addr.clone());
             println!(
-                "  Server Daemon: \x1b[32m🟢 RUNNING\x1b[0m (PID: {}, {}:{})",
-                pid, host, port
+                "  AgentGate:     \x1b[32m🟢 RUNNING\x1b[0m ({}:{}, PID: {})",
+                host, port, pid
             );
         } else {
-            println!("  Server Daemon: \x1b[31m🔴 STOPPED\x1b[0m");
+            println!("  AgentGate:     \x1b[31m🔴 STOPPED\x1b[0m");
         }
 
         if let Some(ref c) = client_cfg {
@@ -1084,33 +1103,35 @@ pub async fn handle_main_menu(config: &AgentGateConfig) -> Result<()> {
             println!("  Client Config: \x1b[33m⚪ Not configured\x1b[0m");
         }
 
-        println!("\n  \x1b[1;32m1)\x1b[0m \x1b[1mSet up as SERVER (Host)\x1b[0m");
-        println!("     → Start daemon & generate agent token in 1 click");
-        println!("  \x1b[1;34m2)\x1b[0m \x1b[1mConnect as CLIENT (Laptop / Controller)\x1b[0m");
-        println!("     → Enter server IP & token to start running commands");
-        println!("  \x1b[1m3)\x1b[0m Open Interactive Shell (Run commands directly)");
-        println!("  \x1b[1m4)\x1b[0m Create another Token");
-        println!("  \x1b[1m5)\x1b[0m View Active Tokens");
-        println!("  \x1b[1m6)\x1b[0m Server Status & Network URLs");
-        println!("  \x1b[1m7)\x1b[0m View Audit Logs");
-        println!("  \x1b[1m8)\x1b[0m Stop Server Daemon");
+        println!("\n  \x1b[1;32m1)\x1b[0m \x1b[1mSet up AgentGate (Server)\x1b[0m");
+        println!("     → Configure network, TLS certificates & start service");
+        println!("  \x1b[1;34m2)\x1b[0m \x1b[1mConnect to AgentGate (Client)\x1b[0m");
+        println!("     → Configure laptop to connect to a remote server");
+        println!("  \x1b[1m3)\x1b[0m Secure Shell (Interactive console)");
+        println!("  \x1b[1m4)\x1b[0m Manage Tokens (Create, List, Revoke)");
+        println!("  \x1b[1m5)\x1b[0m View Audit Logs");
+        if pid_opt.is_some() {
+            println!("  \x1b[1m6)\x1b[0m Stop AgentGate");
+        } else {
+            println!("  \x1b[1m6)\x1b[0m Start AgentGate");
+        }
+        println!("  \x1b[1m7)\x1b[0m Update AgentGate");
         println!("  \x1b[1m0)\x1b[0m Exit");
 
-        print!("\nSelect an option [0-8]: ");
+        print!("\nSelect an option [0-7]: ");
         std::io::stdout().flush()?;
 
         let mut input = String::new();
         let bytes = std::io::stdin().read_line(&mut input)?;
         if bytes == 0 {
-            // EOF / Ctrl+D
             println!("\n👋 Goodbye!");
             break;
         }
 
-        let choice = input.trim();
+        let choice = input.trim().to_lowercase();
         println!();
 
-        match choice {
+        match choice.as_str() {
             "1" => {
                 let _ = handle_server_setup_wizard(config).await;
                 println!();
@@ -1124,65 +1145,11 @@ pub async fn handle_main_menu(config: &AgentGateConfig) -> Result<()> {
                 println!();
             }
             "4" => {
-                println!("--- Create Scoped Token ---");
-                print!("Enter token name [default: agent-token]: ");
-                std::io::stdout().flush()?;
-                let mut name = String::new();
-                std::io::stdin().read_line(&mut name)?;
-                let mut name = name.trim().to_string();
-                if name.is_empty() {
-                    name = "agent-token".to_string();
-                }
-
-                println!("\nSelect policy for this token:");
-                println!("  1) read-only     (System diagnostics: uptime, df, free, ps, uname)");
-                println!("  2) docker-ops    (Docker container management)");
-                println!("  3) webserver-ops (Nginx and web service management)");
-                print!("Select [1-3, default 1]: ");
-                std::io::stdout().flush()?;
-                let mut pol_choice = String::new();
-                std::io::stdin().read_line(&mut pol_choice)?;
-                let policy = match pol_choice.trim() {
-                    "2" => "docker-ops",
-                    "3" => "webserver-ops",
-                    _ => "read-only",
-                };
-
-                println!("\nSelect expiration:");
-                println!("  1) 24 hours");
-                println!("  2) 7 days");
-                println!("  3) 30 days");
-                println!("  4) Never (Permanent)");
-                print!("Select [1-4, default 1]: ");
-                std::io::stdout().flush()?;
-                let mut exp_choice = String::new();
-                std::io::stdin().read_line(&mut exp_choice)?;
-                let expires = match exp_choice.trim() {
-                    "2" => Some("7d".to_string()),
-                    "3" => Some("30d".to_string()),
-                    "4" => Some("never".to_string()),
-                    _ => Some("24h".to_string()),
-                };
-
-                let token_sub = TokenSubcommand::Create {
-                    name,
-                    policy: policy.to_string(),
-                    expires,
-                };
-                let _ = handle_token(Some(token_sub), config);
+                let _ = handle_token_menu(config);
                 println!();
             }
             "5" => {
-                println!("--- Active Tokens ---");
-                let _ = handle_token(Some(TokenSubcommand::List), config);
-                println!();
-            }
-            "6" => {
-                let _ = handle_status(StatusArgs::default(), config);
-                println!();
-            }
-            "7" => {
-                println!("--- Audit Logs (Last 10 commands) ---");
+                println!("--- Recent Audit Logs ---");
                 let _ = handle_logs(
                     LogsArgs {
                         limit: 10,
@@ -1192,8 +1159,16 @@ pub async fn handle_main_menu(config: &AgentGateConfig) -> Result<()> {
                 );
                 println!();
             }
-            "8" => {
-                let _ = handle_stop(config);
+            "6" => {
+                if pid_opt.is_some() {
+                    let _ = handle_stop(config);
+                } else {
+                    let _ = handle_start(StartArgs::default(), config);
+                }
+                println!();
+            }
+            "7" => {
+                let _ = handle_update();
                 println!();
             }
             "0" | "exit" | "quit" | "q" => {
@@ -1201,11 +1176,113 @@ pub async fn handle_main_menu(config: &AgentGateConfig) -> Result<()> {
                 break;
             }
             _ => {
-                println!("Invalid option. Please choose 0-8.\n");
+                println!("Invalid option. Please choose 0-7.\n");
             }
         }
     }
 
+    Ok(())
+}
+
+fn handle_token_menu(config: &AgentGateConfig) -> Result<()> {
+    use std::io::Write;
+
+    println!("--- Token Management ---");
+    println!("  1) Create a new token");
+    println!("  2) List active tokens");
+    println!("  3) Revoke a token");
+    println!("  0) Back");
+    print!("\nSelect [0-3, default 0]: ");
+    std::io::stdout().flush()?;
+
+    let mut choice = String::new();
+    std::io::stdin().read_line(&mut choice)?;
+    match choice.trim() {
+        "1" => {
+            print!("Enter token name [default: agent-token, 'b' to cancel]: ");
+            std::io::stdout().flush()?;
+            let mut name = String::new();
+            std::io::stdin().read_line(&mut name)?;
+            let name_trim = name.trim();
+            if name_trim == "b" || name_trim == "back" || name_trim == "cancel" {
+                println!("Cancelled.");
+                return Ok(());
+            }
+            let name = if name_trim.is_empty() {
+                "agent-token".to_string()
+            } else {
+                name_trim.to_string()
+            };
+
+            println!("\nSelect policy:");
+            println!("  1) read-only     (System diagnostics: uptime, df, free, ps, uname, logs)");
+            println!("  2) docker-ops    (Docker container management)");
+            print!("Select [1-2, default 1, 'b' to cancel]: ");
+            std::io::stdout().flush()?;
+            let mut pol = String::new();
+            std::io::stdin().read_line(&mut pol)?;
+            let pol_trim = pol.trim();
+            if pol_trim == "b" || pol_trim == "back" || pol_trim == "cancel" {
+                println!("Cancelled.");
+                return Ok(());
+            }
+            let policy = match pol_trim {
+                "2" => "docker-ops",
+                _ => "read-only",
+            };
+
+            println!("\nSelect expiration:");
+            println!("  1) 24 hours");
+            println!("  2) 7 days");
+            println!("  3) 30 days");
+            println!("  4) Never (Permanent)");
+            print!("Select [1-4, default 1, 'b' to cancel]: ");
+            std::io::stdout().flush()?;
+            let mut exp = String::new();
+            std::io::stdin().read_line(&mut exp)?;
+            let exp_trim = exp.trim();
+            if exp_trim == "b" || exp_trim == "back" || exp_trim == "cancel" {
+                println!("Cancelled.");
+                return Ok(());
+            }
+            let expires = match exp_trim {
+                "2" => Some("7d".to_string()),
+                "3" => Some("30d".to_string()),
+                "4" => Some("never".to_string()),
+                _ => Some("24h".to_string()),
+            };
+
+            let token_sub = TokenSubcommand::Create {
+                name,
+                policy: policy.to_string(),
+                expires,
+            };
+            handle_token(Some(token_sub), config)?;
+        }
+        "2" => {
+            handle_token(Some(TokenSubcommand::List), config)?;
+        }
+        "3" => {
+            print!("Enter token name to revoke ('b' to cancel): ");
+            std::io::stdout().flush()?;
+            let mut name = String::new();
+            std::io::stdin().read_line(&mut name)?;
+            let name_trim = name.trim();
+            if name_trim == "b" || name_trim == "back" || name_trim == "cancel" {
+                println!("Cancelled.");
+                return Ok(());
+            }
+            if !name_trim.is_empty() {
+                handle_token(
+                    Some(TokenSubcommand::Revoke {
+                        name: name_trim.to_string(),
+                    }),
+                    config,
+                )?;
+            }
+        }
+        _ => {}
+    }
     Ok(())
 }
 
@@ -1230,20 +1307,30 @@ async fn handle_server_setup_wizard(config: &AgentGateConfig) -> Result<()> {
     println!("\nWhere should the server accept connections from?");
     println!("  1) All network interfaces (0.0.0.0) [Recommended for remote access]");
     println!("  2) Local machine only (127.0.0.1)");
-    print!("Select [1-2, default 1]: ");
+    print!("Select [1-2, default 1, 'b' to cancel]: ");
     std::io::stdout().flush()?;
     let mut net_choice = String::new();
     std::io::stdin().read_line(&mut net_choice)?;
-    let remote = net_choice.trim() != "2";
+    let net_trimmed = net_choice.trim().to_lowercase();
+    if net_trimmed == "b" || net_trimmed == "back" || net_trimmed == "cancel" {
+        println!("Setup cancelled.\n");
+        return Ok(());
+    }
+    let remote = net_trimmed != "2";
 
-    print!("Port to listen on [default: 7991]: ");
+    print!("Port to listen on [default: 7991, 'b' to cancel]: ");
     std::io::stdout().flush()?;
     let mut port_str = String::new();
     std::io::stdin().read_line(&mut port_str)?;
-    let port = port_str.trim().parse::<u16>().unwrap_or(7991);
+    let port_trimmed = port_str.trim().to_lowercase();
+    if port_trimmed == "b" || port_trimmed == "back" || port_trimmed == "cancel" {
+        println!("Setup cancelled.\n");
+        return Ok(());
+    }
+    let port = port_trimmed.parse::<u16>().unwrap_or(7991);
 
-    // 3. Start daemon
-    println!("\n🚀 Starting AgentGate daemon...");
+    // 3. Start AgentGate
+    println!("\n🚀 Starting AgentGate...");
     let start_args = StartArgs {
         listen: None,
         port: Some(port),
@@ -1253,64 +1340,72 @@ async fn handle_server_setup_wizard(config: &AgentGateConfig) -> Result<()> {
     };
     handle_start(start_args, config)?;
 
-    // 4. Generate token
-    println!("\n🔑 Generating agent access token...");
-    println!("Select policy for this token:");
-    println!("  1) read-only     (Safe diagnostics: uptime, df, free, ps, logs)");
-    println!("  2) docker-ops    (Manage Docker containers)");
-    println!("  3) webserver-ops (Nginx and web service management)");
-    print!("Select [1-3, default 1]: ");
-    std::io::stdout().flush()?;
-    let mut pol_choice = String::new();
-    std::io::stdin().read_line(&mut pol_choice)?;
-    let policy = match pol_choice.trim() {
-        "2" => "docker-ops",
-        "3" => "webserver-ops",
-        _ => "read-only",
-    };
-
-    println!("\nSelect token duration:");
-    println!("  1) 24 hours");
-    println!("  2) 7 days");
-    println!("  3) 30 days");
-    println!("  4) Never (Permanent)");
-    print!("Select [1-4, default 1]: ");
-    std::io::stdout().flush()?;
-    let mut exp_choice = String::new();
-    std::io::stdin().read_line(&mut exp_choice)?;
-    let expires = match exp_choice.trim() {
-        "2" => Some("7d".to_string()),
-        "3" => Some("30d".to_string()),
-        "4" => Some("never".to_string()),
-        _ => Some("24h".to_string()),
-    };
-
-    let mut store = TokenStore::load(&config.tokens_file)?;
-    let duration = expires
-        .as_deref()
-        .and_then(|e| parse_duration(e).ok().flatten());
-    let token_name = format!("agent-{}", &uuid::Uuid::new_v4().to_string()[..6]);
-    let raw_token = store.create(&token_name, policy, duration)?;
-    store.save()?;
-
     // Discover network addresses to show user
     let addrs = detect_network_addresses(port, "https");
 
     println!("\n\x1b[1;32m==========================================================\x1b[0m");
-    println!("\x1b[1;32m🎉 SERVER SETUP COMPLETE!\x1b[0m");
+    println!("\x1b[1;32m🎉 AGENTGATE SERVER READY!\x1b[0m");
     println!("\x1b[1;32m==========================================================\x1b[0m");
-    println!("Your server is now running and ready to accept commands.\n");
-    println!("  \x1b[1mPort:\x1b[0m       {}", port);
-    println!("  \x1b[1mPolicy:\x1b[0m     {}", policy);
-    println!("  \x1b[1mToken:\x1b[0m      \x1b[1;33m{}\x1b[0m", raw_token);
+    println!("Port:  {}", port);
     println!("\nReachable Addresses for this server:");
     for (label, url) in &addrs {
         println!("  • {:12} {}", label, url);
     }
+
+    // Optional token generation
+    print!("\nWould you like to generate an access token now? [y/N]: ");
+    std::io::stdout().flush()?;
+    let mut tok_ans = String::new();
+    std::io::stdin().read_line(&mut tok_ans)?;
+    let tok_ans = tok_ans.trim().to_lowercase();
+
+    if tok_ans == "y" || tok_ans == "yes" {
+        println!("\nSelect policy for this token:");
+        println!("  1) read-only     (Safe diagnostics: uptime, df, free, ps, logs)");
+        println!("  2) docker-ops    (Manage Docker containers)");
+        print!("Select [1-2, default 1]: ");
+        std::io::stdout().flush()?;
+        let mut pol_choice = String::new();
+        std::io::stdin().read_line(&mut pol_choice)?;
+        let policy = match pol_choice.trim() {
+            "2" => "docker-ops",
+            _ => "read-only",
+        };
+
+        println!("\nSelect token duration:");
+        println!("  1) 24 hours");
+        println!("  2) 7 days");
+        println!("  3) 30 days");
+        println!("  4) Never (Permanent)");
+        print!("Select [1-4, default 1]: ");
+        std::io::stdout().flush()?;
+        let mut exp_choice = String::new();
+        std::io::stdin().read_line(&mut exp_choice)?;
+        let expires = match exp_choice.trim() {
+            "2" => Some("7d".to_string()),
+            "3" => Some("30d".to_string()),
+            "4" => Some("never".to_string()),
+            _ => Some("24h".to_string()),
+        };
+
+        let mut store = TokenStore::load(&config.tokens_file)?;
+        let duration = expires
+            .as_deref()
+            .and_then(|e| parse_duration(e).ok().flatten());
+        let token_name = format!("agent-{}", &uuid::Uuid::new_v4().to_string()[..6]);
+        let raw_token = store.create(&token_name, policy, duration)?;
+        store.save()?;
+
+        println!("\n🔑 Access Token Created:");
+        println!("  \x1b[1;33m{}\x1b[0m", raw_token);
+        println!("  Policy: {}", policy);
+    } else {
+        println!("\n👉 To create an access token anytime, run:");
+        println!("   agentgate token create --name my-agent --policy read-only");
+    }
+
     println!("\n\x1b[1;36m👉 ON YOUR LAPTOP / CLIENT PC:\x1b[0m");
-    println!("   1. Run: \x1b[1magentgate\x1b[0m");
-    println!("   2. Choose \x1b[1m2) Connect as CLIENT\x1b[0m");
-    println!("   3. Enter the IP above and paste the token!\n");
+    println!("   Connect with: agentgate client connect --server <SERVER_IP>:{} --token <TOKEN>", port);
     println!("\x1b[1;32m==========================================================\x1b[0m\n");
 
     Ok(())
@@ -1323,33 +1418,46 @@ async fn handle_client_setup_wizard(config: &AgentGateConfig) -> Result<()> {
     println!("\x1b[1;37m             🚪 AgentGate Client Setup\x1b[0m");
     println!("\x1b[1;36m==========================================================\x1b[0m");
 
-    print!("Enter server IP or hostname [default: 127.0.0.1]: ");
+    print!("Enter server IP or hostname [default: 127.0.0.1, 'b' to cancel]: ");
     std::io::stdout().flush()?;
     let mut server_ip = String::new();
     std::io::stdin().read_line(&mut server_ip)?;
     let server_ip = server_ip.trim();
+    if server_ip == "b" || server_ip == "back" || server_ip == "cancel" {
+        println!("Cancelled.\n");
+        return Ok(());
+    }
     let host = if server_ip.is_empty() {
         "127.0.0.1"
     } else {
         server_ip
     };
 
-    print!("Enter server port [default: 7991]: ");
+    print!("Enter server port [default: 7991, 'b' to cancel]: ");
     std::io::stdout().flush()?;
     let mut port_str = String::new();
     std::io::stdin().read_line(&mut port_str)?;
-    let port = port_str.trim().parse::<u16>().unwrap_or(7991);
+    let port_str = port_str.trim();
+    if port_str == "b" || port_str == "back" || port_str == "cancel" {
+        println!("Cancelled.\n");
+        return Ok(());
+    }
+    let port = port_str.parse::<u16>().unwrap_or(7991);
 
     let clean_host = host
         .trim_start_matches("http://")
         .trim_start_matches("https://");
     let server_url = format!("https://{}:{}", clean_host, port);
 
-    print!("Paste AgentGate Token (starts with ag_): ");
+    print!("Paste AgentGate Token (starts with ag_, 'b' to cancel): ");
     std::io::stdout().flush()?;
     let mut token = String::new();
     std::io::stdin().read_line(&mut token)?;
     let token = token.trim().to_string();
+    if token == "b" || token == "back" || token == "cancel" {
+        println!("Cancelled.\n");
+        return Ok(());
+    }
 
     if token.is_empty() {
         println!("❌ Token cannot be empty.\n");
