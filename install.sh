@@ -1,42 +1,80 @@
 #!/usr/bin/env bash
 set -e
 
+REPO="lawrencemwangi496-design/agentgate"
+VERSION="v0.1.0"
+TAR_NAME="agentgate-linux-x86_64.tar.gz"
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TAR_NAME}"
+
+echo ""
 echo "=========================================================="
-echo "             🚪 AgentGate Server Installer"
+echo "             🚪 AgentGate Quick Installer"
 echo "=========================================================="
 
-INSTALL_DIR="/usr/local/bin"
+# Check OS and Architecture
+OS="$(uname -s)"
+ARCH="$(uname -m)"
 
-if ! command -v cargo >/dev/null 2>&1; then
-    echo "❌ Rust/Cargo is not installed on this system."
-    echo "💡 You can install Rust quickly with:"
-    echo "   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-    echo "   or copy the precompiled binary from your PC using scp:"
-    echo "   scp ~/.local/bin/agentgate user@server:/usr/local/bin/"
+if [ "$OS" != "Linux" ] || [ "$ARCH" != "x86_64" ]; then
+    echo "⚠️ Warning: Automated prebuilt binary is currently built for Linux x86_64 (detected $OS $ARCH)."
+    echo "Attempting to install via cargo if available..."
+    if command -v cargo >/dev/null 2>&1; then
+        cargo install --git "https://github.com/${REPO}.git"
+        echo "✅ Installed via Cargo!"
+        exit 0
+    else
+        echo "❌ Cargo not found. Please install Rust from https://rustup.rs"
+        exit 1
+    fi
+fi
+
+# Determine install location
+if [ "$(id -u)" -eq 0 ]; then
+    INSTALL_DIR="/usr/local/bin"
+else
+    INSTALL_DIR="${HOME}/.local/bin"
+    mkdir -p "$INSTALL_DIR"
+fi
+
+TMP_DIR="$(mktemp -d)"
+echo "⬇️ Downloading AgentGate ($VERSION)..."
+
+if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${TAR_NAME}"
+elif command -v wget >/dev/null 2>&1; then
+    wget -qO "${TMP_DIR}/${TAR_NAME}" "$DOWNLOAD_URL"
+else
+    echo "❌ Error: Neither curl nor wget is installed."
     exit 1
 fi
 
-echo "📦 Compiling and installing AgentGate from GitHub..."
-TMP_DIR=$(mktemp -d)
-git clone --depth 1 https://github.com/lawrencemwangi496-design/agentgate.git "$TMP_DIR"
-cd "$TMP_DIR"
-cargo build --release
+echo "📦 Installing binary to ${INSTALL_DIR}/agentgate..."
+tar -xzf "${TMP_DIR}/${TAR_NAME}" -C "$TMP_DIR"
 
 if [ -w "$INSTALL_DIR" ]; then
-    cp target/release/agentgate "$INSTALL_DIR/agentgate"
+    mv "${TMP_DIR}/agentgate" "${INSTALL_DIR}/agentgate"
+    chmod +x "${INSTALL_DIR}/agentgate"
 else
-    sudo cp target/release/agentgate "$INSTALL_DIR/agentgate"
+    sudo mv "${TMP_DIR}/agentgate" "${INSTALL_DIR}/agentgate"
+    sudo chmod +x "${INSTALL_DIR}/agentgate"
 fi
 
 rm -rf "$TMP_DIR"
 
-echo "⚙️ Initializing AgentGate..."
-agentgate init
+# Ensure directory is in PATH if using ~/.local/bin
+case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *)
+        export PATH="${INSTALL_DIR}:${PATH}"
+        ;;
+esac
 
+echo "✅ AgentGate installed successfully!"
 echo ""
-echo "=========================================================="
-echo "🎉 AgentGate installed successfully at $INSTALL_DIR/agentgate"
-echo "=========================================================="
-echo "👉 Start server on all interfaces:  agentgate start --remote"
-echo "👉 Or launch the interactive menu:  agentgate"
-echo "=========================================================="
+
+# If terminal is interactive, open the wizard immediately!
+if [ -t 0 ]; then
+    exec "${INSTALL_DIR}/agentgate"
+else
+    echo "👉 Run 'agentgate' to launch the interactive manager!"
+fi
