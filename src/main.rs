@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
             config.listen_addr = args.listen;
             config.listen_port = args.port;
 
-            server::run_server(&config, !args.no_tls).await?;
+            server::run_server(&config, args.tls_cert, args.tls_key, !args.no_tls).await?;
         }
         Commands::Status(args) => {
             let addr = format!("{}:{}", args.host, args.port);

@@ -43,13 +43,21 @@ pub enum Commands {
 
 #[derive(Args)]
 pub struct ServeArgs {
-    /// Address to listen on
+    /// Address to listen on (127.0.0.1 for local only, 0.0.0.0 for remote/network access)
     #[arg(long, default_value = "127.0.0.1")]
     pub listen: String,
 
     /// Port to listen on
     #[arg(long, default_value_t = 7991)]
     pub port: u16,
+
+    /// Optional path to custom TLS certificate (e.g. Let's Encrypt fullchain.pem)
+    #[arg(long)]
+    pub tls_cert: Option<std::path::PathBuf>,
+
+    /// Optional path to custom TLS private key (e.g. Let's Encrypt privkey.pem)
+    #[arg(long)]
+    pub tls_key: Option<std::path::PathBuf>,
 
     /// Run as plain HTTP without TLS
     #[arg(long, default_value_t = false)]

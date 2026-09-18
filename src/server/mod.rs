@@ -57,6 +57,8 @@ pub struct HealthResponse {
 
 pub async fn run_server(
     config: &AgentGateConfig,
+    custom_cert: Option<std::path::PathBuf>,
+    custom_key: Option<std::path::PathBuf>,
     use_tls: bool,
 ) -> Result<()> {
     let audit_logger = Arc::new(AuditLogger::new(config.logs_dir.clone()));
@@ -84,10 +86,15 @@ pub async fn run_server(
         .context("Invalid listen address or port")?;
 
     if use_tls {
-        let cert_path = config.tls_cert_path();
-        let key_path = config.tls_key_path();
-
-        cert::ensure_self_signed_cert(&cert_path, &key_path)?;
+        let (cert_path, key_path) = match (custom_cert, custom_key) {
+            (Some(c), Some(k)) => (c, k),
+            _ => {
+                let cp = config.tls_cert_path();
+                let kp = config.tls_key_path();
+                cert::ensure_self_signed_cert(&cp, &kp)?;
+                (cp, kp)
+            }
+        };
 
         let rustls_config = RustlsConfig::from_pem_file(&cert_path, &key_path)
             .await
