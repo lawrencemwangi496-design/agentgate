@@ -168,8 +168,8 @@ struct TokenRow {
     policy: String,
     #[tabled(rename = "CREATED AT")]
     created_at: String,
-    #[tabled(rename = "EXPIRES AT")]
-    expires_at: String,
+    #[tabled(rename = "EXPIRES")]
+    expires: String,
     #[tabled(rename = "LAST USED")]
     last_used_at: String,
 }
@@ -263,23 +263,26 @@ pub fn handle_token(cmd: TokenSubcommand, config: &AgentGateConfig) -> Result<()
             }
 
             let duration = if let Some(exp_str) = expires {
-                Some(parse_duration(&exp_str)?)
+                parse_duration(&exp_str)?
             } else {
                 None
             };
 
             let raw_token = store.create(&name, &policy, duration)?;
 
+            let expires_display = match duration {
+                Some(d) => {
+                    let expiry_time = chrono::Utc::now() + d;
+                    format!("{} (at {} UTC)", format_duration_human(d), expiry_time.format("%Y-%m-%d %H:%M"))
+                }
+                None => "Never (Permanent long-lasting token)".to_string(),
+            };
+
             println!("\n✅ Token created successfully!");
             println!("----------------------------------------------------------------------");
             println!("NAME:       {}", name);
             println!("POLICY:     {}", policy);
-            println!(
-                "EXPIRES:    {}",
-                duration
-                    .map(|d| format!("in {} seconds", d.num_seconds()))
-                    .unwrap_or_else(|| "Never".to_string())
-            );
+            println!("EXPIRES:    {}", expires_display);
             println!("TOKEN:      {}", raw_token);
             println!("----------------------------------------------------------------------");
             println!("⚠️  Save this token now! It will NOT be shown again.");
@@ -305,10 +308,7 @@ pub fn handle_token(cmd: TokenSubcommand, config: &AgentGateConfig) -> Result<()
                     name: t.name.clone(),
                     policy: t.policy.clone(),
                     created_at: t.created_at.format("%Y-%m-%d %H:%M").to_string(),
-                    expires_at: t
-                        .expires_at
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                        .unwrap_or_else(|| "Never".to_string()),
+                    expires: format_expiry(t.expires_at),
                     last_used_at: t
                         .last_used_at
                         .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
@@ -426,21 +426,84 @@ pub fn handle_logs(args: LogsArgs, config: &AgentGateConfig) -> Result<()> {
     Ok(())
 }
 
-fn parse_duration(s: &str) -> Result<chrono::Duration> {
-    let s = s.trim().to_lowercase();
-    if let Some(hours) = s.strip_suffix('h') {
-        let h: i64 = hours.parse().context("Invalid hours format")?;
-        Ok(chrono::Duration::hours(h))
-    } else if let Some(days) = s.strip_suffix('d') {
-        let d: i64 = days.parse().context("Invalid days format")?;
-        Ok(chrono::Duration::days(d))
-    } else if let Some(mins) = s.strip_suffix('m') {
-        let m: i64 = mins.parse().context("Invalid minutes format")?;
-        Ok(chrono::Duration::minutes(m))
-    } else if let Some(secs) = s.strip_suffix('s') {
-        let sec: i64 = secs.parse().context("Invalid seconds format")?;
-        Ok(chrono::Duration::seconds(sec))
+pub fn parse_duration(s: &str) -> Result<Option<chrono::Duration>> {
+    let clean = s.trim().to_lowercase();
+    if clean.is_empty()
+        || clean == "never"
+        || clean == "forever"
+        || clean == "none"
+        || clean == "0"
+        || clean == "infinite"
+    {
+        return Ok(None);
+    }
+
+    let parts: Vec<&str> = clean.split_whitespace().collect();
+    let (num_str, unit_str) = if parts.len() == 2 {
+        (parts[0], parts[1])
     } else {
-        bail!("Unknown duration format '{}'. Use e.g. '24h', '7d', '30m'", s);
+        let split_idx = clean.find(|c: char| !c.is_ascii_digit()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Missing time unit. Use e.g. '2h', '12 hours', '7d', '30 days', '1 year', or 'never'"
+            )
+        })?;
+        (&clean[..split_idx], &clean[split_idx..])
+    };
+
+    let count: i64 = num_str.parse().context("Invalid number in duration")?;
+    if count <= 0 {
+        bail!("Duration must be a positive number");
+    }
+
+    match unit_str {
+        "s" | "sec" | "secs" | "second" | "seconds" => Ok(Some(chrono::Duration::seconds(count))),
+        "m" | "min" | "mins" | "minute" | "minutes" => Ok(Some(chrono::Duration::minutes(count))),
+        "h" | "hr" | "hrs" | "hour" | "hours" => Ok(Some(chrono::Duration::hours(count))),
+        "d" | "day" | "days" => Ok(Some(chrono::Duration::days(count))),
+        "w" | "wk" | "wks" | "week" | "weeks" => Ok(Some(chrono::Duration::weeks(count))),
+        "mo" | "mon" | "month" | "months" => Ok(Some(chrono::Duration::days(count * 30))),
+        "y" | "yr" | "yrs" | "year" | "years" => Ok(Some(chrono::Duration::days(count * 365))),
+        _ => bail!(
+            "Unknown duration unit '{}'. Use e.g. '2h', '12 hours', '7d', '30 days', '1 year', or 'never'",
+            unit_str
+        ),
+    }
+}
+
+pub fn format_duration_human(d: chrono::Duration) -> String {
+    let days = d.num_days();
+    let hours = d.num_hours();
+    let minutes = d.num_minutes();
+    let seconds = d.num_seconds();
+
+    if days >= 365 {
+        let years = days / 365;
+        format!("in {} year{}", years, if years > 1 { "s" } else { "" })
+    } else if days >= 30 {
+        let months = days / 30;
+        format!("in {} month{}", months, if months > 1 { "s" } else { "" })
+    } else if days > 0 {
+        format!("in {} day{}", days, if days > 1 { "s" } else { "" })
+    } else if hours > 0 {
+        format!("in {} hour{}", hours, if hours > 1 { "s" } else { "" })
+    } else if minutes > 0 {
+        format!("in {} minute{}", minutes, if minutes > 1 { "s" } else { "" })
+    } else {
+        format!("in {} second{}", seconds, if seconds > 1 { "s" } else { "" })
+    }
+}
+
+pub fn format_expiry(expires_at: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    let Some(exp) = expires_at else {
+        return "Never (Permanent)".to_string();
+    };
+
+    let now = chrono::Utc::now();
+    if now > exp {
+        format!("⚠️ EXPIRED ({})", exp.format("%Y-%m-%d %H:%M"))
+    } else {
+        let remaining = exp - now;
+        let human = format_duration_human(remaining);
+        format!("{} ({})", human, exp.format("%Y-%m-%d %H:%M"))
     }
 }

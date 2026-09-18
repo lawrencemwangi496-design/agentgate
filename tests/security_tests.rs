@@ -111,3 +111,33 @@ fn test_policy_allowlist_matching() {
     // Unlisted command
     assert!(!policy.matches("cat", &["/etc/shadow".to_string()]));
 }
+
+#[test]
+fn test_duration_parsing_flexibility() {
+    use agentgate::cli::parse_duration;
+
+    // Never / permanent
+    assert_eq!(parse_duration("never").unwrap(), None);
+    assert_eq!(parse_duration("forever").unwrap(), None);
+    assert_eq!(parse_duration("none").unwrap(), None);
+    assert_eq!(parse_duration("0").unwrap(), None);
+
+    // Hours
+    assert_eq!(parse_duration("2h").unwrap(), Some(chrono::Duration::hours(2)));
+    assert_eq!(parse_duration("4 hours").unwrap(), Some(chrono::Duration::hours(4)));
+    assert_eq!(parse_duration("12 hr").unwrap(), Some(chrono::Duration::hours(12)));
+
+    // Days
+    assert_eq!(parse_duration("1d").unwrap(), Some(chrono::Duration::days(1)));
+    assert_eq!(parse_duration("7 days").unwrap(), Some(chrono::Duration::days(7)));
+    assert_eq!(parse_duration("30 days").unwrap(), Some(chrono::Duration::days(30)));
+
+    // Long lasting
+    assert_eq!(parse_duration("6 months").unwrap(), Some(chrono::Duration::days(180)));
+    assert_eq!(parse_duration("1 year").unwrap(), Some(chrono::Duration::days(365)));
+    assert_eq!(parse_duration("365d").unwrap(), Some(chrono::Duration::days(365)));
+
+    // Invalid units
+    assert!(parse_duration("invalid").is_err());
+    assert!(parse_duration("-5h").is_err());
+}
