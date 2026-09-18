@@ -81,6 +81,8 @@ fn test_policy_allowlist_matching() {
     let policy = Policy {
         name: "test-policy".to_string(),
         description: "Test policy".to_string(),
+        allow: vec![],
+        deny: vec![],
         rules: vec![
             PolicyRule {
                 command: "systemctl".to_string(),
@@ -110,6 +112,41 @@ fn test_policy_allowlist_matching() {
     assert!(!policy.matches("uptime", &["-s".to_string()]));
     // Unlisted command
     assert!(!policy.matches("cat", &["/etc/shadow".to_string()]));
+}
+
+#[test]
+fn test_guardrail_policy_behavior() {
+    use agentgate::policy::default_guardrails;
+
+    let standard_policy = Policy {
+        name: "standard".to_string(),
+        description: "General administration with safety guardrails".to_string(),
+        allow: vec![PolicyRule {
+            command: "*".to_string(),
+            args: vec!["*".to_string()],
+        }],
+        deny: default_guardrails(),
+        rules: vec![],
+    };
+
+    // Freedom: Diagnostic and safe ops are allowed
+    assert!(standard_policy.matches("uptime", &[]));
+    assert!(standard_policy.matches("uptime", &["-p".to_string()]));
+    assert!(standard_policy.matches("cat", &["/etc/hosts".to_string()]));
+    assert!(standard_policy.matches("ls", &["-la".to_string(), "/var/log".to_string()]));
+    assert!(standard_policy.matches("systemctl", &["status".to_string(), "nginx".to_string()]));
+    assert!(standard_policy.matches("docker", &["ps".to_string()]));
+
+    // Guardrails: Dangerous commands are strictly DENIED
+    assert!(!standard_policy.matches("rm", &["-rf".to_string(), "/".to_string()]));
+    assert!(!standard_policy.matches("rm", &["-rf".to_string(), "/*".to_string()]));
+    assert!(!standard_policy.matches("mkfs.ext4", &["/dev/sda1".to_string()]));
+    assert!(!standard_policy.matches("dd", &["if=/dev/zero".to_string(), "of=/dev/sda".to_string()]));
+    assert!(!standard_policy.matches("shutdown", &["-h".to_string(), "now".to_string()]));
+    assert!(!standard_policy.matches("reboot", &[]));
+    assert!(!standard_policy.matches("passwd", &[]));
+    assert!(!standard_policy.matches("cat", &["/etc/shadow".to_string()]));
+    assert!(!standard_policy.matches("chmod", &["-R".to_string(), "777".to_string(), "/".to_string()]));
 }
 
 #[test]

@@ -267,19 +267,17 @@ pub async fn handle_interactive_login(
         t.trim().to_string()
     } else if is_local {
         println!("\n? How would you like to authenticate?");
-        println!("  1) Auto-generate a new CLI token with 'read-only' policy (Instant connect)");
-        println!("  2) Auto-generate a new CLI token with 'docker-ops' policy");
-        println!("  3) Paste an authentication token manually");
-        print!("\nSelect option [1-3, default 1]: ");
+        println!("  1) Auto-generate a new CLI token with 'standard' policy (Full access with guardrails)");
+        println!("  2) Paste an authentication token manually");
+        print!("\nSelect option [1-2, default 1]: ");
         io::stdout().flush()?;
         let mut auth_choice = String::new();
         io::stdin().read_line(&mut auth_choice)?;
         let auth_choice = auth_choice.trim();
 
         let policy_name = match auth_choice {
-            "2" => "docker-ops",
-            "3" => "",
-            _ => "read-only",
+            "2" => "",
+            _ => "standard",
         };
 
         if policy_name.is_empty() {

@@ -240,8 +240,8 @@ pub enum TokenSubcommand {
         #[arg(long)]
         name: String,
 
-        /// Policy name to attach to this token
-        #[arg(long)]
+        /// Policy name to attach to this token (defaults to 'standard')
+        #[arg(long, default_value = "standard")]
         policy: String,
 
         /// Token expiration duration (e.g. '24h', '7d', '30m'). Defaults to never.
@@ -350,8 +350,7 @@ struct AuditRow {
 }
 
 // Embedded default starter policies
-const STARTER_READ_ONLY: &str = include_str!("../../policies/read-only.yaml");
-const STARTER_DOCKER: &str = include_str!("../../policies/docker-ops.yaml");
+const STARTER_STANDARD: &str = include_str!("../../policies/standard.yaml");
 
 pub fn detect_network_addresses(port: u16, protocol: &str) -> Vec<(&'static str, String)> {
     let mut addrs = Vec::new();
@@ -430,10 +429,9 @@ pub fn handle_init(args: InitArgs, config: &AgentGateConfig) -> Result<()> {
 
     AgentGateConfig::init(Some(chosen_port), Some(chosen_listen))?;
 
-    // Populate starter policies if they don't already exist
+    // Populate starter policy if it doesn't already exist
     let starters = [
-        ("read-only.yaml", STARTER_READ_ONLY),
-        ("docker-ops.yaml", STARTER_DOCKER),
+        ("standard.yaml", STARTER_STANDARD),
     ];
 
     for (fname, content) in starters {
@@ -924,15 +922,17 @@ pub fn handle_policy(cmd: Option<PolicySubcommand>, config: &AgentGateConfig) ->
             let new_policy = Policy {
                 name: name.clone(),
                 description,
-                rules: vec![PolicyRule {
-                    command: "echo".to_string(),
+                allow: vec![PolicyRule {
+                    command: "*".to_string(),
                     args: vec!["*".to_string()],
                 }],
+                deny: crate::policy::default_guardrails(),
+                rules: Vec::new(),
             };
             store.save_policy(&new_policy)?;
             let file_path = config.policies_dir.join(format!("{}.yaml", name));
             println!("✓ Policy created at: {}", file_path.display());
-            println!("Edit this file to add allowed commands.");
+            println!("Guardrails: Destructive system commands (rm -rf /, mkfs, shutdown, etc.) automatically blocked.");
         }
         PolicySubcommand::Delete { name } => {
             if store.delete_policy(&name)? {
@@ -1214,10 +1214,7 @@ fn handle_token_menu(config: &AgentGateConfig) -> Result<()> {
                 name_trim.to_string()
             };
 
-            println!("\nSelect policy:");
-            println!("  1) read-only     (System diagnostics: uptime, df, free, ps, uname, logs)");
-            println!("  2) docker-ops    (Docker container management)");
-            print!("Select [1-2, default 1, 'b' to cancel]: ");
+            print!("Policy for this token [default: standard (all commands with guardrails), 'b' to cancel]: ");
             std::io::stdout().flush()?;
             let mut pol = String::new();
             std::io::stdin().read_line(&mut pol)?;
@@ -1226,9 +1223,10 @@ fn handle_token_menu(config: &AgentGateConfig) -> Result<()> {
                 println!("Cancelled.");
                 return Ok(());
             }
-            let policy = match pol_trim {
-                "2" => "docker-ops",
-                _ => "read-only",
+            let policy = if pol_trim.is_empty() {
+                "standard"
+            } else {
+                pol_trim
             };
 
             println!("\nSelect expiration:");
@@ -1360,17 +1358,7 @@ async fn handle_server_setup_wizard(config: &AgentGateConfig) -> Result<()> {
     let tok_ans = tok_ans.trim().to_lowercase();
 
     if tok_ans == "y" || tok_ans == "yes" {
-        println!("\nSelect policy for this token:");
-        println!("  1) read-only     (Safe diagnostics: uptime, df, free, ps, logs)");
-        println!("  2) docker-ops    (Manage Docker containers)");
-        print!("Select [1-2, default 1]: ");
-        std::io::stdout().flush()?;
-        let mut pol_choice = String::new();
-        std::io::stdin().read_line(&mut pol_choice)?;
-        let policy = match pol_choice.trim() {
-            "2" => "docker-ops",
-            _ => "read-only",
-        };
+        let policy = "standard";
 
         println!("\nSelect token duration:");
         println!("  1) 24 hours");
