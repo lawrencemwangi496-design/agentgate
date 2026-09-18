@@ -1,0 +1,19 @@
+name: docker-ops
+description: "Manage Docker containers — no exec, no run"
+rules:
+  - command: docker
+    args: ["ps", "*"]
+  - command: docker
+    args: ["logs", "*"]
+  - command: docker
+    args: ["inspect", "*"]
+  - command: docker
+    args: ["restart", "*"]
+  - command: docker
+    args: ["stop", "*"]
+  - command: docker
+    args: ["start", "*"]
+  - command: docker
+    args: ["images", "*"]
+  - command: docker
+    args: ["stats", "*"]

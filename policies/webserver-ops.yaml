@@ -1,0 +1,19 @@
+name: webserver-ops
+description: "Manage nginx and view system status"
+rules:
+  - command: systemctl
+    args: ["status", "*"]
+  - command: systemctl
+    args: ["restart", "nginx"]
+  - command: systemctl
+    args: ["reload", "nginx"]
+  - command: journalctl
+    args: ["-u", "nginx", "*"]
+  - command: cat
+    args: ["/etc/nginx/nginx.conf"]
+  - command: nginx
+    args: ["-t"]
+  - command: nginx
+    args: ["-T"]
+  - command: ss
+    args: ["-tlnp"]
