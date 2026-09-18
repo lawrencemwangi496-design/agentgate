@@ -1387,9 +1387,13 @@ async fn handle_server_setup_wizard(config: &AgentGateConfig) -> Result<()> {
         println!("\n🔑 Access Token Created:");
         println!("  \x1b[1;33m{}\x1b[0m", raw_token);
         println!("  Policy: {}", policy);
+
+        // Auto-configure local client credentials so interactive shell works immediately
+        let _ = crate::client::save_client_config(&format!("https://127.0.0.1:{}", port), &raw_token, true);
+        println!("  ✓ Local client configured (interactive shell is ready to use)");
     } else {
         println!("\n👉 To create an access token anytime, run:");
-        println!("   agentgate token create --name my-agent --policy read-only");
+        println!("   agentgate token create --name my-agent --policy standard");
     }
 
     println!("\n\x1b[1;36m👉 ON YOUR LAPTOP / CLIENT PC:\x1b[0m");

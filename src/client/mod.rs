@@ -200,18 +200,27 @@ pub async fn handle_interactive_login(
         println!("? What AgentGate server do you want to log into?");
         println!("  1) This local machine (https://127.0.0.1:7991)");
         println!("  2) Remote server (enter IP or domain)");
-        print!("\nSelect option [1-2, default 1]: ");
+        print!("\nSelect option [1-2, default 1, 'b' to cancel]: ");
         io::stdout().flush()?;
         let mut choice = String::new();
         io::stdin().read_line(&mut choice)?;
-        let choice = choice.trim();
+        let choice = choice.trim().to_lowercase();
+
+        if choice == "b" || choice == "back" || choice == "cancel" || choice == "q" {
+            println!("Login cancelled.\n");
+            return Ok(());
+        }
 
         if choice == "2" {
-            print!("Enter server address (IP or domain): ");
+            print!("Enter server address (IP or domain, 'b' to cancel): ");
             io::stdout().flush()?;
             let mut addr = String::new();
             io::stdin().read_line(&mut addr)?;
             let addr = addr.trim();
+            if addr == "b" || addr == "back" || addr == "cancel" {
+                println!("Login cancelled.\n");
+                return Ok(());
+            }
 
             print!("Enter server port [default: 7991]: ");
             io::stdout().flush()?;
@@ -248,8 +257,8 @@ pub async fn handle_interactive_login(
     };
 
     if !is_online && is_local {
-        println!("\n🟡 AgentGate daemon is not currently running locally.");
-        print!("? Would you like to start the daemon now? [Y/n]: ");
+        println!("\n🟡 AgentGate server is not currently running locally.");
+        print!("? Would you like to start the server now? [Y/n]: ");
         io::stdout().flush()?;
         let mut ans = String::new();
         io::stdin().read_line(&mut ans)?;
@@ -864,7 +873,10 @@ pub async fn handle_shell(
             handle_login(server_override.clone(), token_override.clone(), true).await?;
             match load_client_config()? {
                 Some(c) => c,
-                None => anyhow::bail!("Login was cancelled or incomplete."),
+                None => {
+                    println!("Interactive shell cancelled.\n");
+                    return Ok(());
+                }
             }
         }
     };
@@ -901,7 +913,7 @@ pub async fn handle_shell(
         }
         _ => {
             println!(
-                "  Status:    \x1b[33m🟡 Offline / Unreachable\x1b[0m (daemon may need starting)"
+                "  Status:    \x1b[33m🟡 Offline / Unreachable\x1b[0m (server may need starting: agentgate start)"
             );
         }
     }

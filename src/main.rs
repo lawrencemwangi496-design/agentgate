@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
             let my_pid = std::process::id() as i32;
             if let Some(existing_pid) = cli::read_pid(&config.pid_file).filter(|&p| p != my_pid) {
                 anyhow::bail!(
-                    "AgentGate daemon is already running (PID: {}). Stop it first with: agentgate stop",
+                    "AgentGate is already running (PID: {}). Stop it first with: agentgate stop",
                     existing_pid
                 );
             }
