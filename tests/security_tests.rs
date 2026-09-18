@@ -81,6 +81,7 @@ fn test_policy_allowlist_matching() {
     let policy = Policy {
         name: "test-policy".to_string(),
         description: "Test policy".to_string(),
+        guardrails: true,
         allow: vec![],
         deny: vec![],
         rules: vec![
@@ -121,6 +122,7 @@ fn test_guardrail_policy_behavior() {
     let standard_policy = Policy {
         name: "standard".to_string(),
         description: "General administration with safety guardrails".to_string(),
+        guardrails: true,
         allow: vec![PolicyRule {
             command: "*".to_string(),
             args: vec!["*".to_string()],
@@ -156,6 +158,25 @@ fn test_guardrail_policy_behavior() {
     assert!(!standard_policy.matches("cat", &["/dev/null".to_string(), "/etc/shadow".to_string()]));
     assert!(!standard_policy.matches("head", &["/etc/shadow".to_string()]));
     assert!(!standard_policy.matches("strings", &["/etc/gshadow".to_string()]));
+}
+
+#[test]
+fn test_policy_guardrails_override() {
+    // If an administrator explicitly wants a reboot/ops policy with guardrails: false
+    let unconstrained_admin_policy = Policy {
+        name: "emergency-ops".to_string(),
+        description: "Deliberate override for emergency maintenance".to_string(),
+        guardrails: false,
+        allow: vec![PolicyRule {
+            command: "reboot".to_string(),
+            args: vec![],
+        }],
+        deny: vec![],
+        rules: vec![],
+    };
+
+    // With guardrails: false, deliberate allowed commands are honored!
+    assert!(unconstrained_admin_policy.matches("reboot", &[]));
 }
 
 #[test]

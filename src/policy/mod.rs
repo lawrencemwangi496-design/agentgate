@@ -9,17 +9,36 @@ pub struct PolicyRule {
     pub args: Vec<String>, // e.g., ["restart", "nginx"] — supports "*" wildcard
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// A complete policy supporting both allowed scopes and safety guardrails (deny rules)
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Policy {
     pub name: String,
     pub description: String,
+    #[serde(default = "default_true")]
+    pub guardrails: bool,
     #[serde(default)]
     pub allow: Vec<PolicyRule>,
     #[serde(default)]
     pub deny: Vec<PolicyRule>,
     #[serde(default)]
     pub rules: Vec<PolicyRule>,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            description: String::new(),
+            guardrails: true,
+            allow: Vec::new(),
+            deny: Vec::new(),
+            rules: Vec::new(),
+        }
+    }
 }
 
 /// The policy store loads all .yaml files from the policies directory
@@ -102,8 +121,8 @@ impl Policy {
     /// 2. Allow list check: If any rule in `allow` (or legacy `rules`) matches, returns `true`.
     /// 3. If neither matches, returns `false`.
     pub fn matches(&self, command: &str, args: &[String]) -> bool {
-        // 1. Hardened semantic guardrails (blocks flag splitting, permutations, and alternative viewers)
-        if is_hardened_destructive_guardrail(command, args) {
+        // 1. Hardened semantic guardrails (active by default, can be set to false if user explicitly wants)
+        if self.guardrails && is_hardened_destructive_guardrail(command, args) {
             return false;
         }
 

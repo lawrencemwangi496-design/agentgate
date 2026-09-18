@@ -922,6 +922,7 @@ pub fn handle_policy(cmd: Option<PolicySubcommand>, config: &AgentGateConfig) ->
             let new_policy = Policy {
                 name: name.clone(),
                 description,
+                guardrails: true,
                 allow: vec![PolicyRule {
                     command: "*".to_string(),
                     args: vec!["*".to_string()],
