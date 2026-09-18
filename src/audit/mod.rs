@@ -78,7 +78,7 @@ impl AuditLogger {
             .collect();
             
         // Sort files by name in reverse order (newest first)
-        files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+        files.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
         
         for file in files {
             if entries.len() >= limit {
@@ -101,10 +101,8 @@ impl AuditLogger {
                     break;
                 }
                 
-                if let Some(token) = token_filter {
-                    if entry.token_name != token {
-                        continue;
-                    }
+                if matches!(token_filter, Some(token) if entry.token_name != token) {
+                    continue;
                 }
                 
                 if denied_only && entry.result != AuditResult::Denied && entry.result != AuditResult::InjectionBlocked {

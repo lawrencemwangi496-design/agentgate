@@ -1,15 +1,9 @@
-mod audit;
-mod auth;
-mod cli;
-mod config;
-mod executor;
-mod policy;
-mod server;
+use agentgate::cli::{self, Cli, Commands};
+use agentgate::config::AgentGateConfig;
+use agentgate::server;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Commands};
-use config::AgentGateConfig;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::timeout;

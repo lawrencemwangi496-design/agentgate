@@ -34,7 +34,7 @@ impl PolicyStore {
                 if path.is_file()
                     && path
                         .extension()
-                        .map_or(false, |ext| ext == "yaml" || ext == "yml")
+                        .is_some_and(|ext| ext == "yaml" || ext == "yml")
                 {
                     let content = fs::read_to_string(&path)?;
                     let policy: Policy = serde_yaml::from_str(&content)?;

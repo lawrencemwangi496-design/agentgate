@@ -115,10 +115,8 @@ impl TokenStore {
         for (i, token) in self.tokens.iter().enumerate() {
             let is_match: bool = token.hash.as_bytes().ct_eq(hash.as_bytes()).into();
             if is_match {
-                if let Some(expires_at) = token.expires_at {
-                    if now > expires_at {
-                        return Ok(None); // Expired
-                    }
+                if token.expires_at.is_some_and(|expires_at| now > expires_at) {
+                    return Ok(None); // Expired
                 }
                 found_index = Some(i);
                 break;

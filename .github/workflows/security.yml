@@ -1,0 +1,40 @@
+name: Security & Quality Checks
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  security-checks:
+    name: Security Audits & Lints
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Stable Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify Compilation (cargo check)
+        run: cargo check --verbose
+
+      - name: Security Linter (cargo clippy)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run Security Test Suite
+        run: cargo test --verbose
+
+      - name: Dependency Security Audit
+        uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
