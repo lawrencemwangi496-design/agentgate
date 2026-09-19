@@ -6,9 +6,23 @@ TAR_NAME="agentgate-linux-x86_64.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${TAR_NAME}"
 CHECKSUMS_URL="https://github.com/${REPO}/releases/latest/download/SHA256SUMS"
 
+# Parse command line flags
+IS_UPDATE=false
+NO_LAUNCH=false
+for arg in "$@"; do
+    case "$arg" in
+        --update) IS_UPDATE=true ;;
+        --no-launch) NO_LAUNCH=true ;;
+    esac
+done
+
 echo ""
 echo "=========================================================="
-echo "             🚪 AgentGate Quick Installer"
+if [ "$IS_UPDATE" = true ]; then
+    echo "             🚪 AgentGate Release Updater"
+else
+    echo "             🚪 AgentGate Quick Installer"
+fi
 echo "=========================================================="
 
 # Check OS and Architecture
@@ -40,8 +54,14 @@ else
     exit 1
 fi
 
-# Determine install location
-if [ "$(id -u)" -eq 0 ]; then
+# Determine install location intelligently
+# 1. If an existing agentgate binary is already on PATH, overwrite it in-place
+# 2. If system config /etc/agentgate exists or user is root, use /usr/local/bin
+# 3. Otherwise default to ~/.local/bin
+EXISTING_BIN="$(command -v agentgate 2>/dev/null || true)"
+if [ -n "$EXISTING_BIN" ] && [ -x "$EXISTING_BIN" ]; then
+    INSTALL_DIR="$(dirname "$EXISTING_BIN")"
+elif [ -d "/etc/agentgate" ] || [ "$(id -u)" -eq 0 ] || [ -w "/usr/local/bin" ]; then
     INSTALL_DIR="/usr/local/bin"
 else
     INSTALL_DIR="${HOME}/.local/bin"
@@ -96,6 +116,7 @@ if [ -w "$INSTALL_DIR" ]; then
     mv "${TMP_DIR}/agentgate" "${INSTALL_DIR}/agentgate"
     chmod +x "${INSTALL_DIR}/agentgate"
 else
+    echo "🔒 System install location detected (${INSTALL_DIR}). Elevating with sudo..."
     sudo mv "${TMP_DIR}/agentgate" "${INSTALL_DIR}/agentgate"
     sudo chmod +x "${INSTALL_DIR}/agentgate"
 fi
@@ -111,6 +132,26 @@ case ":$PATH:" in
         echo ""
         ;;
 esac
+
+# Deeper service reload & restart on update
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet agentgate 2>/dev/null; then
+    echo "🔄 Restarting active AgentGate systemd service..."
+    if [ "$(id -u)" -eq 0 ]; then
+        systemctl daemon-reload && systemctl restart agentgate
+    else
+        sudo systemctl daemon-reload && sudo systemctl restart agentgate
+    fi
+    echo "✓ AgentGate systemd service restarted with new release."
+elif "${INSTALL_DIR}/agentgate" status 2>/dev/null | grep -q "RUNNING"; then
+    echo "🔄 Restarting active AgentGate daemon..."
+    "${INSTALL_DIR}/agentgate" restart 2>/dev/null || true
+    echo "✓ AgentGate daemon restarted with new release."
+fi
+
+if [ "$IS_UPDATE" = true ] || [ "$NO_LAUNCH" = true ]; then
+    echo "✅ AgentGate updated to latest release successfully!"
+    exit 0
+fi
 
 echo "✅ AgentGate installed successfully!"
 echo ""

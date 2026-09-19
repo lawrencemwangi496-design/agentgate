@@ -921,17 +921,44 @@ pub fn handle_status(args: StatusArgs, config: &AgentGateConfig) -> Result<()> {
 
 pub fn handle_update() -> Result<()> {
     println!("🔄 Checking for updates and installing latest AgentGate release...");
-    let status = std::process::Command::new("sh")
-        .arg("-c")
-        .arg("curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | bash")
-        .status()
-        .context("Failed to execute update script")?;
+
+    let current_exe = std::env::current_exe().unwrap_or_default();
+    let is_system_install = current_exe.starts_with("/usr/local/bin")
+        || current_exe.starts_with("/usr/bin")
+        || Path::new("/etc/agentgate").exists();
+
+    let is_root = unsafe { libc::geteuid() == 0 };
+
+    let mut cmd = if is_system_install && !is_root {
+        println!("🔒 Detected system installation (requires root privileges to update).");
+        println!("   Elevating with sudo...");
+        let mut c = std::process::Command::new("sudo");
+        c.args([
+            "sh",
+            "-c",
+            "curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | bash -s -- --update",
+        ]);
+        c
+    } else {
+        let mut c = std::process::Command::new("sh");
+        c.args([
+            "-c",
+            "curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | bash -s -- --update",
+        ]);
+        c
+    };
+
+    let status = cmd.status().context("Failed to execute update script")?;
 
     if status.success() {
-        println!("✅ AgentGate updated successfully! Run 'agentgate --version' to verify.");
+        println!("\n✅ AgentGate updated successfully! Run 'agentgate --version' to verify.");
     } else {
-        println!("⚠️  Update command returned non-zero status. You can update manually with:");
-        println!("   curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | bash");
+        println!("\n⚠️  Update command returned non-zero status.");
+        if is_system_install && !is_root {
+            println!("💡 Try running with sudo: sudo agentgate update");
+        } else {
+            println!("💡 You can update manually with: curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | bash");
+        }
     }
     Ok(())
 }
