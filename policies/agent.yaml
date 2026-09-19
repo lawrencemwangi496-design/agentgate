@@ -1,0 +1,74 @@
+name: agent
+description: "Seatbelt policy for autonomous AI agents — broad command execution with strict destructive guardrails and per-token OS user isolation"
+guardrails: true
+allow:
+  - command: "*"
+    args: ["*"]
+deny:
+  # Destructive filesystem wipes
+  - command: rm
+    args: ["-rf", "/*"]
+  - command: rm
+    args: ["-rf", "/"]
+  - command: rm
+    args: ["-fr", "/*"]
+  - command: rm
+    args: ["-fr", "/"]
+  - command: rm
+    args: ["-r", "/*"]
+  - command: rm
+    args: ["-r", "/"]
+  - command: rm
+    args: ["-rf", "~"]
+  - command: rm
+    args: ["-rf", "~/*"]
+
+  # Disk formatting & partition destruction
+  - command: mkfs*
+    args: ["*"]
+  - command: dd
+    args: ["*"]
+  - command: fdisk
+    args: ["*"]
+  - command: parted
+    args: ["*"]
+  - command: wipefs
+    args: ["*"]
+
+  # System shutdown & reboot
+  - command: shutdown
+    args: ["*"]
+  - command: reboot
+    args: ["*"]
+  - command: poweroff
+    args: ["*"]
+  - command: halt
+    args: ["*"]
+  - command: init
+    args: ["0"]
+  - command: init
+    args: ["6"]
+
+  # User management & account lockout
+  - command: passwd
+    args: ["*"]
+  - command: chpasswd
+    args: ["*"]
+  - command: userdel
+    args: ["*"]
+  - command: groupdel
+    args: ["*"]
+
+  # System-wide permission wrecking
+  - command: chmod
+    args: ["-R", "777", "/"]
+  - command: chmod
+    args: ["-R", "000", "/"]
+
+  # Stealing shadow passwords
+  - command: cat
+    args: ["*shadow*"]
+  - command: cat
+    args: ["/etc/shadow"]
+  - command: cat
+    args: ["/etc/gshadow"]

@@ -1,0 +1,31 @@
+name: read-only
+description: "Diagnostic commands only — no state modifications permitted"
+guardrails: true
+allow:
+  - command: uptime
+    args: []
+  - command: df
+    args: ["*"]
+  - command: free
+    args: ["*"]
+  - command: ps
+    args: ["*"]
+  - command: whoami
+    args: []
+  - command: hostname
+    args: []
+  - command: uname
+    args: ["*"]
+  - command: cat
+    args: ["/etc/os-release"]
+  - command: systemctl
+    args: ["status", "*"]
+  - command: journalctl
+    args: ["*"]
+  - command: ip
+    args: ["addr", "show"]
+  - command: ss
+    args: ["*"]
+deny: []
+rules: []
+actions: {}

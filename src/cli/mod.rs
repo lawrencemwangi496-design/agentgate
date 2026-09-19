@@ -398,6 +398,9 @@ struct AuditRow {
 }
 
 // Embedded default starter policies
+const STARTER_AGENT: &str = include_str!("../../policies/agent.yaml");
+const STARTER_PIPELINE: &str = include_str!("../../policies/pipeline.yaml");
+const STARTER_READ_ONLY: &str = include_str!("../../policies/read-only.yaml");
 const STARTER_STANDARD: &str = include_str!("../../policies/standard.yaml");
 
 pub fn detect_network_addresses(port: u16, protocol: &str) -> Vec<(&'static str, String)> {
@@ -477,8 +480,11 @@ pub fn handle_init(args: InitArgs, config: &AgentGateConfig) -> Result<()> {
 
     AgentGateConfig::init(Some(chosen_port), Some(chosen_listen))?;
 
-    // Populate starter policy if it doesn't already exist
+    // Populate starter policies if they don't already exist
     let starters = [
+        ("agent.yaml", STARTER_AGENT),
+        ("pipeline.yaml", STARTER_PIPELINE),
+        ("read-only.yaml", STARTER_READ_ONLY),
         ("standard.yaml", STARTER_STANDARD),
     ];
 

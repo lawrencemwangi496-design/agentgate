@@ -156,8 +156,12 @@ pub async fn run_server(
         }
     }
 
-    // Background update checker: checks GitHub releases every 60 minutes and logs notice
-    tokio::spawn(async move {
+    // Background update checker: checks GitHub releases every 60 minutes and logs notice (can be disabled via env var)
+    if !std::env::var("AGENTGATE_DISABLE_UPDATE_CHECK")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        tokio::spawn(async move {
         let client = match reqwest::Client::builder()
             .user_agent("AgentGate-UpdateChecker")
             .timeout(std::time::Duration::from_secs(10))
@@ -189,6 +193,7 @@ pub async fn run_server(
             tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
         }
     });
+    }
 
     if use_tls {
         let (cert_path, key_path) = match (custom_cert, custom_key) {
