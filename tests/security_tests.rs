@@ -732,6 +732,23 @@ async fn test_executor_with_cwd() {
     assert!(res.stdout.trim().contains("tmp"));
 }
 
+#[tokio::test]
+async fn test_executor_privilege_drop_unprivileged_loud_failure() {
+    use agentgate::executor::{self, ParsedCommand};
+
+    // If running as unprivileged user, attempting to switch OS user must fail loudly with PermissionDenied
+    let current_uid = unsafe { libc::geteuid() };
+    if current_uid != 0 {
+        let cmd = ParsedCommand::parse("id").unwrap();
+        // Resolving an existing system user (root) succeeds at user lookup,
+        // but executing the process must fail loudly in the pre_exec hook because daemon lacks root capabilities
+        let res = executor::execute(&cmd, 5, Some("root"), None).await;
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("PermissionDenied") || err_msg.contains("unprivileged") || err_msg.contains("Permission denied"));
+    }
+}
+
 #[test]
 fn test_sudoers_gtfobins_and_wildcard_rejection() {
     use agentgate::sudoers::validate_command_for_sudo;

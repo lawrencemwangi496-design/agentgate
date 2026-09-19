@@ -199,21 +199,38 @@ pub async fn execute(
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            builder.as_std_mut().uid(uid).gid(gid);
+            // NOTE: We do NOT call builder.as_std_mut().uid(uid).gid(gid).
+            // Calling std's uid()/gid() introduces ordering ambiguity with pre_exec.
+            // Instead, all credential modifications are performed deterministically
+            // inside pre_exec in the exact POSIX-mandated sequence:
+            // setgroups(0, NULL) -> setgid(gid) -> setuid(uid).
+            let target_user_name = user.to_string();
             unsafe {
                 builder.as_std_mut().pre_exec(move || {
-                    // Strict privilege drop order: setgroups(0, NULL) -> setgid -> setuid
-                    // If root, clear all supplementary groups and switch IDs
-                    if libc::geteuid() == 0 {
+                    let current_euid = libc::geteuid();
+                    if current_euid == 0 {
+                        // Process has root privileges: enforce complete privilege drop
+                        // 1. Clear supplementary groups first while we retain CAP_SETGID
                         if libc::setgroups(0, std::ptr::null()) != 0 {
                             return Err(std::io::Error::last_os_error());
                         }
+                        // 2. Set primary group ID
                         if libc::setgid(gid) != 0 {
                             return Err(std::io::Error::last_os_error());
                         }
+                        // 3. Set user ID
                         if libc::setuid(uid) != 0 {
                             return Err(std::io::Error::last_os_error());
                         }
+                    } else if current_euid != uid || libc::getegid() != gid {
+                        // Non-root daemon cannot switch OS users: fail loudly!
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            format!(
+                                "Cannot switch to OS user '{}' (UID {}, GID {}): daemon is running unprivileged (EUID {}, EGID {})",
+                                target_user_name, uid, gid, current_euid, libc::getegid()
+                            ),
+                        ));
                     }
                     Ok(())
                 });
@@ -247,7 +264,7 @@ pub async fn execute(
     // 5. Spawn child process
     let mut child = builder
         .spawn()
-        .with_context(|| format!("Failed to spawn process {:?}", cmd.binary_path))?;
+        .map_err(|e| anyhow::anyhow!("Failed to spawn process {:?}: {}", cmd.binary_path, e))?;
 
     let mut stdout_pipe = child.stdout.take().expect("stdout piped");
     let mut stderr_pipe = child.stderr.take().expect("stderr piped");

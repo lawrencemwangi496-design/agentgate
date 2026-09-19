@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -202,11 +203,17 @@ pub fn install_sudoers_fragment(token_name: &str, content: &str) -> Result<PathB
     // Sudoers parser automatically ignores dotfiles.
     // Writing in the same directory enables atomic rename (same filesystem, eliminating TOCTOU).
     let temp_path = target_dir.join(format!(".agentgate_tmp_{}_{}", token_name, uuid::Uuid::new_v4()));
-    fs::write(&temp_path, content)
-        .with_context(|| format!("Failed to write temporary sudoers file at {:?}", temp_path))?;
-
-    // Sudoers files MUST be mode 0440
-    let _ = fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o440));
+    {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o440)
+            .open(&temp_path)
+            .with_context(|| format!("Failed to create temporary sudoers file at {:?}", temp_path))?;
+        file.write_all(content.as_bytes())
+            .with_context(|| format!("Failed to write temporary sudoers file at {:?}", temp_path))?;
+        file.sync_all()?;
+    }
 
     // Validate syntax with visudo -cf
     let visudo_bin = find_visudo();

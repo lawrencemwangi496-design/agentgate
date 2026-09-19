@@ -639,27 +639,56 @@ async fn exec_handler(
             .into_response();
     }
 
-    // 4. Validate optional cwd
-    let cwd_path = if let Some(ref dir) = payload.cwd {
+    // 4. Validate optional cwd: must be an absolute path and resolve to an existing directory
+    let cwd_canonical = if let Some(ref dir) = payload.cwd {
         let p = std::path::Path::new(dir);
-        if !p.is_dir() {
+        if !p.is_absolute() {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: "invalid_cwd".to_string(),
-                    message: format!("Working directory does not exist: {}", dir),
+                    message: format!("Working directory must be an absolute path: {}", dir),
                     exit_code: 1,
                 }),
             )
                 .into_response();
         }
-        Some(dir.as_str())
+        match std::fs::canonicalize(p) {
+            Ok(canonical) => {
+                if !canonical.is_dir() {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: "invalid_cwd".to_string(),
+                            message: format!("Working directory is not a directory: {}", dir),
+                            exit_code: 1,
+                        }),
+                    )
+                        .into_response();
+                }
+                Some(canonical)
+            }
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "invalid_cwd".to_string(),
+                        message: format!("Working directory does not exist: {}", dir),
+                        exit_code: 1,
+                    }),
+                )
+                    .into_response();
+            }
+        }
     } else {
         None
     };
 
+    let cwd_path = cwd_canonical.as_ref().map(|p| p.to_string_lossy());
+    let cwd_str = cwd_path.as_deref();
+
     // 5. Execute command safely via executor (no shell, with timeout, per-token OS user, and cwd)
-    let exec_res = match executor::execute(&parsed_cmd, 30, stored_token.os_user.as_deref(), cwd_path).await {
+    let exec_res = match executor::execute(&parsed_cmd, 30, stored_token.os_user.as_deref(), cwd_str).await {
         Ok(res) => res,
         Err(e) => {
             let reason = format!("Execution error: {}", e);
