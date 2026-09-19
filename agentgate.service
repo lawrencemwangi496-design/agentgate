@@ -5,7 +5,7 @@ Documentation=https://github.com/lawrencemwangi496-design/agentgate
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/agentgate serve
+ExecStart=/usr/local/bin/agentgate serve --listen 0.0.0.0
 Restart=on-failure
 RestartSec=5s
 
