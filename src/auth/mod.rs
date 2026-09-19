@@ -71,6 +71,8 @@ pub struct StoredToken {
     pub last_used_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os_user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 /// The token store
@@ -181,6 +183,7 @@ impl TokenStore {
         policy: &str,
         expires_in: Option<chrono::Duration>,
         os_user: Option<String>,
+        tier: Option<String>,
     ) -> Result<String> {
         self.with_lock(|store| {
             // Check if token with the same name already exists
@@ -209,6 +212,7 @@ impl TokenStore {
                 expires_at,
                 last_used_at: None,
                 os_user: os_user.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()),
+                tier: tier.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
             };
 
             store.tokens.push(stored_token);

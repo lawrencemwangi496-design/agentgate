@@ -255,6 +255,10 @@ pub enum TokenSubcommand {
         /// Explicit OS system user name to bind to
         #[arg(long)]
         os_user: Option<String>,
+
+        /// Security tier ('read', 'ops', 'admin') with pre-configured OS user and narrow sudoers
+        #[arg(long)]
+        tier: Option<String>,
     },
 
     /// List all generated tokens
@@ -321,6 +325,8 @@ struct TokenRow {
     name: String,
     #[tabled(rename = "POLICY")]
     policy: String,
+    #[tabled(rename = "TIER")]
+    tier: String,
     #[tabled(rename = "OS USER")]
     os_user: String,
     #[tabled(rename = "CREATED AT")]
@@ -824,13 +830,102 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
             expires,
             user_mode,
             os_user,
+            tier,
         } => {
+            let normalized_tier = tier.as_deref().map(|t| t.to_lowercase());
+
+            // Validate tier if specified
+            if let Some(ref t) = normalized_tier {
+                match t.as_str() {
+                    "read" | "ops" | "admin" => {}
+                    _ => bail!("Invalid tier '{}'. Valid tiers are: 'read', 'ops', 'admin'", t),
+                }
+            }
+
+            let initial_duration = if let Some(exp_str) = expires {
+                parse_duration(&exp_str)?
+            } else {
+                None
+            };
+
+            // Configure tier defaults: policy, OS user, duration constraints, sudoers
+            let (final_policy, bound_os_user, final_duration) = match normalized_tier.as_deref() {
+                Some("read") => {
+                    let pol = if policy == "standard" { "read-only".to_string() } else { policy };
+                    let u = os_user.unwrap_or_else(|| format!("ag-{}", name));
+                    if let Err(e) = create_system_user(&u) {
+                        eprintln!("⚠️  Notice: system user '{}' could not be auto-created: {}. Please ensure user exists.", u, e);
+                    }
+                    (pol, Some(u), initial_duration)
+                }
+                Some("ops") => {
+                    let pol = if policy == "standard" { "docker-ops".to_string() } else { policy };
+                    let u = os_user.unwrap_or_else(|| format!("ag-{}", name));
+                    if let Err(e) = create_system_user(&u) {
+                        eprintln!("⚠️  Notice: system user '{}' could not be auto-created: {}. Please ensure user exists.", u, e);
+                    }
+                    // Exact commands only for narrow sudo
+                    let ops_commands = vec![
+                        "/usr/bin/systemctl restart nginx".to_string(),
+                        "/usr/bin/systemctl reload nginx".to_string(),
+                    ];
+                    let content = crate::sudoers::generate_sudoers_content(&u, &ops_commands)?;
+                    match crate::sudoers::install_sudoers_fragment(&name, &content) {
+                        Ok(p) => println!("✓ Sudoers fragment installed safely: {:?}", p),
+                        Err(e) => eprintln!("⚠️  Notice: sudoers fragment could not be installed (run with root/sudo): {}", e),
+                    }
+                    (pol, Some(u), initial_duration)
+                }
+                Some("admin") => {
+                    // Admin tier requires a short mandatory expiry (maximum 24 hours)
+                    let dur = match initial_duration {
+                        Some(d) if d <= chrono::Duration::hours(24) => Some(d),
+                        Some(_) => {
+                            bail!("Admin tier requires a short mandatory expiry (maximum 24 hours).");
+                        }
+                        None => {
+                            println!("ℹ️  Admin tier defaults to short mandatory 24-hour expiry.");
+                            Some(chrono::Duration::hours(24))
+                        }
+                    };
+                    let pol = policy;
+                    let u = os_user.unwrap_or_else(|| format!("ag-{}", name));
+                    if let Err(e) = create_system_user(&u) {
+                        eprintln!("⚠️  Notice: system user '{}' could not be auto-created: {}. Please ensure user exists.", u, e);
+                    }
+                    // Exact commands only for admin operations
+                    let admin_commands = vec![
+                        "/usr/bin/systemctl restart nginx".to_string(),
+                        "/usr/bin/systemctl reload nginx".to_string(),
+                    ];
+                    let content = crate::sudoers::generate_sudoers_content(&u, &admin_commands)?;
+                    match crate::sudoers::install_sudoers_fragment(&name, &content) {
+                        Ok(p) => println!("✓ Sudoers fragment installed safely: {:?}", p),
+                        Err(e) => eprintln!("⚠️  Notice: sudoers fragment could not be installed (run with root/sudo): {}", e),
+                    }
+                    (pol, Some(u), dur)
+                }
+                None => {
+                    let bound_u = if user_mode || os_user.is_some() {
+                        let u = os_user.unwrap_or_else(|| format!("ag-{}", name));
+                        if let Err(e) = create_system_user(&u) {
+                            eprintln!("⚠️  Notice: system user '{}' could not be auto-created: {}. Please ensure user exists.", u, e);
+                        }
+                        Some(u)
+                    } else {
+                        None
+                    };
+                    (policy, bound_u, initial_duration)
+                }
+                _ => unreachable!(),
+            };
+
             // Verify policy exists
             let policy_store = PolicyStore::load(&config.policies_dir)?;
-            if policy_store.get(&policy).is_none() {
+            if policy_store.get(&final_policy).is_none() {
                 bail!(
                     "Policy '{}' does not exist. Available policies: {:?}",
-                    policy,
+                    final_policy,
                     policy_store
                         .list()
                         .iter()
@@ -839,25 +934,15 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
                 );
             }
 
-            let duration = if let Some(exp_str) = expires {
-                parse_duration(&exp_str)?
-            } else {
-                None
-            };
+            let raw_token = store.create(
+                &name,
+                &final_policy,
+                final_duration,
+                bound_os_user.clone(),
+                normalized_tier.clone(),
+            )?;
 
-            let bound_os_user = if user_mode || os_user.is_some() {
-                let u = os_user.unwrap_or_else(|| format!("ag-{}", name));
-                if let Err(e) = create_system_user(&u) {
-                    eprintln!("⚠️  Notice: system user '{}' could not be auto-created: {}. Please ensure user exists.", u, e);
-                }
-                Some(u)
-            } else {
-                None
-            };
-
-            let raw_token = store.create(&name, &policy, duration, bound_os_user.clone())?;
-
-            let expires_display = match duration {
+            let expires_display = match final_duration {
                 Some(d) => {
                     let expiry_time = chrono::Utc::now() + d;
                     format!(
@@ -872,7 +957,8 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
             println!("\n✅ Token created successfully!");
             println!("----------------------------------------------------------------------");
             println!("NAME:       {}", name);
-            println!("POLICY:     {}", policy);
+            println!("TIER:       {}", normalized_tier.as_deref().unwrap_or("custom"));
+            println!("POLICY:     {}", final_policy);
             println!("OS USER:    {}", bound_os_user.as_deref().unwrap_or("daemon default (no user isolation)"));
             println!("EXPIRES:    {}", expires_display);
             println!("TOKEN:      {}", raw_token);
@@ -906,6 +992,7 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
                 .map(|t| TokenRow {
                     name: t.name.clone(),
                     policy: t.policy.clone(),
+                    tier: t.tier.clone().unwrap_or_else(|| "custom".to_string()),
                     os_user: t.os_user.clone().unwrap_or_else(|| "default".to_string()),
                     created_at: t.created_at.format("%Y-%m-%d %H:%M").to_string(),
                     expires: format_expiry(t.expires_at),
@@ -929,10 +1016,7 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
                     let _ = remove_system_user(os_user);
                 }
                 // Also clean up any sudoers fragment
-                let sudoers_file = Path::new("/etc/sudoers.d").join(format!("agentgate-{}", name));
-                if sudoers_file.exists() {
-                    let _ = fs::remove_file(&sudoers_file);
-                }
+                let _ = crate::sudoers::remove_sudoers_fragment(&name);
                 println!(
                     "✓ Token '{}' has been revoked and can no longer be used.",
                     name
@@ -1318,6 +1402,7 @@ fn handle_token_menu(config: &AgentGateConfig) -> Result<()> {
                 expires,
                 user_mode: false,
                 os_user: None,
+                tier: None,
             };
             handle_token(Some(token_sub), config)?;
         }
@@ -1445,7 +1530,7 @@ async fn handle_server_setup_wizard(config: &AgentGateConfig) -> Result<()> {
             .as_deref()
             .and_then(|e| parse_duration(e).ok().flatten());
         let token_name = format!("agent-{}", &uuid::Uuid::new_v4().to_string()[..6]);
-        let raw_token = store.create(&token_name, policy, duration, None)?;
+        let raw_token = store.create(&token_name, policy, duration, None, None)?;
         store.save()?;
 
         println!("\n🔑 Access Token Created:");

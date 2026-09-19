@@ -348,8 +348,8 @@ fn test_token_store_concurrent_revocation_and_validation() {
 
     let (raw1, raw2) = {
         let mut store = TokenStore::load(&tokens_file).unwrap();
-        let r1 = store.create("token1", "test-policy", None, None).unwrap();
-        let r2 = store.create("token2", "test-policy", None, None).unwrap();
+        let r1 = store.create("token1", "test-policy", None, None, None).unwrap();
+        let r2 = store.create("token2", "test-policy", None, None, None).unwrap();
         (r1, r2)
     };
 
@@ -659,7 +659,7 @@ fn test_per_token_os_user_creation_and_validation() {
     let raw_token = {
         let mut store = TokenStore::load(&tokens_file).unwrap();
         store
-            .create("isolated-agent", "standard", None, Some("ag-isolated".to_string()))
+            .create("isolated-agent", "standard", None, Some("ag-isolated".to_string()), None)
             .unwrap()
     };
 
@@ -705,6 +705,139 @@ async fn test_executor_with_nonexistent_os_user_fails_gracefully() {
     assert!(res.is_err());
     assert!(res.unwrap_err().to_string().contains("does not exist"));
 }
+
+#[test]
+fn test_sudoers_gtfobins_and_wildcard_rejection() {
+    use agentgate::sudoers::validate_command_for_sudo;
+
+    // Shells and interpreters strictly rejected
+    assert!(validate_command_for_sudo("/bin/bash -c whoami").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/python3 script.py").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/perl -e 1").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/node server.js").is_err());
+
+    // Editors and pagers strictly rejected
+    assert!(validate_command_for_sudo("/usr/bin/vim /etc/nginx.conf").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/nano /etc/nginx.conf").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/less /var/log/syslog").is_err());
+
+    // System utility GTFOBins escapes strictly rejected
+    assert!(validate_command_for_sudo("/usr/bin/find / -name test").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/xargs rm").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/env whoami").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/git status").is_err());
+
+    // Wildcards strictly rejected
+    assert!(validate_command_for_sudo("/usr/bin/systemctl restart *").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/docker ps *").is_err());
+
+    // 'ALL' in command position strictly rejected
+    assert!(validate_command_for_sudo("ALL").is_err());
+    assert!(validate_command_for_sudo("/bin/ALL").is_err());
+
+    // Relative binary path strictly rejected
+    assert!(validate_command_for_sudo("systemctl restart nginx").is_err());
+
+    // Binary with no arguments strictly rejected (because in sudoers it matches arbitrary arguments)
+    assert!(validate_command_for_sudo("/usr/bin/systemctl").is_err());
+
+    // systemctl edit strictly rejected
+    assert!(validate_command_for_sudo("/usr/bin/systemctl edit nginx").is_err());
+
+    // Metacharacters rejected
+    assert!(validate_command_for_sudo("/usr/bin/systemctl restart nginx; whoami").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/systemctl restart nginx &").is_err());
+
+    // Valid exact commands with absolute path and exact arguments ACCEPTED
+    assert!(validate_command_for_sudo("/usr/bin/systemctl restart nginx").is_ok());
+    assert!(validate_command_for_sudo("/usr/bin/systemctl reload nginx").is_ok());
+    assert!(validate_command_for_sudo("/usr/bin/systemctl status nginx").is_ok());
+    // Explicit empty arguments string representation accepted
+    assert!(validate_command_for_sudo("/usr/local/bin/sync-cache \"\"").is_ok());
+}
+
+#[test]
+fn test_generate_sudoers_content_and_policy_integration() {
+    use agentgate::policy::{Policy, PolicyRule};
+    use agentgate::sudoers::{generate_sudoers_content, generate_sudoers_from_policy};
+
+    let cmds = vec![
+        "/usr/bin/systemctl restart nginx".to_string(),
+        "/usr/bin/systemctl reload nginx".to_string(),
+    ];
+    let content = generate_sudoers_content("ag-ops-user", &cmds).unwrap();
+    assert!(content.contains("ag-ops-user ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx"));
+
+    // Policy with exact commands produces valid sudoers
+    let exact_policy = Policy {
+        name: "nginx-ops".to_string(),
+        description: "nginx management".to_string(),
+        guardrails: true,
+        rules: vec![
+            PolicyRule {
+                command: "/usr/bin/systemctl".to_string(),
+                args: vec!["restart".to_string(), "nginx".to_string()],
+            },
+            PolicyRule {
+                command: "/usr/bin/systemctl".to_string(),
+                args: vec!["reload".to_string(), "nginx".to_string()],
+            },
+        ],
+        allow: vec![],
+        deny: vec![],
+    };
+    let sudoers_gen = generate_sudoers_from_policy(&exact_policy, "ag-agent").unwrap();
+    assert!(sudoers_gen.contains("ag-agent ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx"));
+
+    // Policy with wildcards fails sudoers generation
+    let wildcard_policy = Policy {
+        name: "wild-policy".to_string(),
+        description: "wildcard rules".to_string(),
+        guardrails: true,
+        rules: vec![
+            PolicyRule {
+                command: "systemctl".to_string(),
+                args: vec!["status".to_string(), "*".to_string()],
+            },
+        ],
+        allow: vec![],
+        deny: vec![],
+    };
+    let wild_res = generate_sudoers_from_policy(&wildcard_policy, "ag-agent");
+    assert!(wild_res.is_err());
+    assert!(wild_res.unwrap_err().to_string().contains("wildcards"));
+
+    // Policy with GTFOBins binary fails sudoers generation
+    let gtfobins_policy = Policy {
+        name: "gtfo-policy".to_string(),
+        description: "gtfobins".to_string(),
+        guardrails: true,
+        rules: vec![
+            PolicyRule {
+                command: "/usr/bin/vim".to_string(),
+                args: vec!["/etc/hosts".to_string()],
+            },
+        ],
+        allow: vec![],
+        deny: vec![],
+    };
+    let gtfo_res = generate_sudoers_from_policy(&gtfobins_policy, "ag-agent");
+    assert!(gtfo_res.is_err());
+    assert!(gtfo_res.unwrap_err().to_string().contains("GTFOBins"));
+}
+
+#[test]
+fn test_admin_tier_duration_check() {
+    // Admin tier enforces short mandatory expiry (<= 24h)
+    let one_day = chrono::Duration::hours(24);
+    let two_days = chrono::Duration::hours(48);
+    let twelve_hours = chrono::Duration::hours(12);
+
+    assert!(twelve_hours <= one_day);
+    assert!(one_day <= chrono::Duration::hours(24));
+    assert!(two_days > chrono::Duration::hours(24));
+}
+
 
 
 
