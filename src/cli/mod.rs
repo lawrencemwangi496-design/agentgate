@@ -652,6 +652,38 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
 
     if let Err(e) = std::net::TcpListener::bind(bind_addr) {
         if e.kind() == std::io::ErrorKind::AddrInUse {
+            // Check if AgentGate is already running under systemd or another process
+            let is_systemd = std::process::Command::new("systemctl")
+                .args(["is-active", "--quiet", "agentgate"])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+
+            let check_addr: std::net::SocketAddr = format!("127.0.0.1:{}", target_port)
+                .parse()
+                .unwrap_or(bind_addr);
+
+            let port_open = std::net::TcpStream::connect_timeout(
+                &check_addr,
+                std::time::Duration::from_millis(400),
+            )
+            .is_ok();
+
+            if is_systemd {
+                println!("🟢 AgentGate is already running as a system service (systemd)!");
+                println!("   Listening: https://{}:{}", config.listen_addr, target_port);
+                println!("   Status:    sudo systemctl status agentgate");
+                println!("   Restart:   sudo systemctl restart agentgate");
+                println!("   Stop:      sudo systemctl stop agentgate");
+                return Ok(());
+            } else if port_open {
+                println!("🟢 AgentGate is already running on port {}!", target_port);
+                println!("   Address:   https://{}:{}", config.listen_addr, target_port);
+                println!("   Status:    agentgate status");
+                println!("   Stop:      agentgate stop");
+                return Ok(());
+            }
+
             eprintln!(
                 "❌ Port {} is already in use by another process on {}.",
                 target_port, target_listen

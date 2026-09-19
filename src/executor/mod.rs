@@ -152,14 +152,29 @@ pub fn resolve_os_user(username: &str) -> Result<(u32, u32, PathBuf)> {
         use std::ffi::CString;
         let c_user = CString::new(username)
             .map_err(|_| anyhow::anyhow!("Invalid username containing null bytes"))?;
-        let pwd = unsafe { libc::getpwnam(c_user.as_ptr()) };
-        if pwd.is_null() {
+        let mut pwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut pwd_ptr: *mut libc::passwd = std::ptr::null_mut();
+        let mut buf = vec![0; 4096];
+
+        let res = unsafe {
+            libc::getpwnam_r(
+                c_user.as_ptr(),
+                pwd.as_mut_ptr(),
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+                &mut pwd_ptr,
+            )
+        };
+
+        if res != 0 || pwd_ptr.is_null() {
             bail!("System user '{}' does not exist on this machine", username);
         }
+
+        let pwd = unsafe { pwd.assume_init() };
         let (uid, gid, home) = unsafe {
-            let home_cstr = std::ffi::CStr::from_ptr((*pwd).pw_dir);
+            let home_cstr = std::ffi::CStr::from_ptr(pwd.pw_dir);
             let home_str = home_cstr.to_string_lossy().into_owned();
-            ((*pwd).pw_uid, (*pwd).pw_gid, PathBuf::from(home_str))
+            (pwd.pw_uid, pwd.pw_gid, PathBuf::from(home_str))
         };
         Ok((uid, gid, home))
     }
