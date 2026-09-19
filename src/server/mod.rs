@@ -18,7 +18,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
@@ -30,7 +30,7 @@ pub struct AppState {
     pub trusted_proxies: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ExecRequest {
     pub command: String,
 }
@@ -44,17 +44,54 @@ pub struct ExecSuccessResponse {
     pub truncated: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct ErrorResponse {
     pub error: String,
     pub message: String,
     pub exit_code: i32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
+}
+
+/// Helper function to create the Axum router with security layers applied
+pub fn create_router(config: &AgentGateConfig, state: AppState) -> Router {
+    let mut app = Router::new()
+        .route("/", get(console_handler))
+        .route("/console", get(console_handler))
+        .route("/health", get(health_handler))
+        .route("/v1/health", get(health_handler))
+        .route("/v1/exec", post(exec_handler));
+
+    // Hardened CORS: Default to NO CORS headers.
+    // Cross-origin browser requests are strictly denied by the browser's Same-Origin Policy.
+    // Only enable if explicit trusted origins are configured.
+    if !config.allowed_origins.is_empty() {
+        let mut origins = Vec::new();
+        for o in &config.allowed_origins {
+            if let Ok(val) = o.parse::<axum::http::HeaderValue>() {
+                origins.push(val);
+            }
+        }
+        if !origins.is_empty() {
+            let cors = CorsLayer::new()
+                .allow_origin(origins)
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                .allow_headers([
+                    axum::http::header::AUTHORIZATION,
+                    axum::http::header::CONTENT_TYPE,
+                ]);
+            app = app.layer(cors);
+        }
+    }
+
+    app.layer(axum::extract::DefaultBodyLimit::max(64 * 1024)) // 64KB max request body — blocks large payload exhaustion
+        .layer(tower::limit::ConcurrencyLimitLayer::new(128)) // 128 concurrent connection limit — blocks bot DDoS hammering
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
 }
 
 pub async fn run_server(
@@ -71,22 +108,7 @@ pub async fn run_server(
         trusted_proxies: vec!["127.0.0.1".to_string(), "::1".to_string()],
     };
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
-    let app = Router::new()
-        .route("/", get(console_handler))
-        .route("/console", get(console_handler))
-        .route("/health", get(health_handler))
-        .route("/v1/health", get(health_handler))
-        .route("/v1/exec", post(exec_handler))
-        .layer(cors)
-        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024)) // 64KB max request body — blocks large payload exhaustion
-        .layer(tower::limit::ConcurrencyLimitLayer::new(128)) // 128 concurrent connection limit — blocks bot DDoS hammering
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    let app = create_router(config, state);
 
     let addr: SocketAddr = format!("{}:{}", config.listen_addr, config.listen_port)
         .parse()

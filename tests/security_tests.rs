@@ -371,3 +371,88 @@ fn test_token_store_concurrent_revocation_and_validation() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
+#[tokio::test]
+async fn test_cors_hardened_by_default_and_configurable() {
+    use agentgate::audit::AuditLogger;
+    use agentgate::config::AgentGateConfig;
+    use agentgate::server::{create_router, AppState};
+    use axum::http::{Request, StatusCode};
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    let temp_dir =
+        std::env::temp_dir().join(format!("agentgate_cors_test_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let mut config = AgentGateConfig {
+        config_dir: temp_dir.clone(),
+        config_file: temp_dir.join("config.yaml"),
+        client_file: temp_dir.join("client.yaml"),
+        policies_dir: temp_dir.join("policies"),
+        tokens_file: temp_dir.join("tokens.yaml"),
+        certs_dir: temp_dir.join("certs"),
+        logs_dir: temp_dir.join("logs"),
+        pid_file: temp_dir.join("pid"),
+        listen_addr: "127.0.0.1".to_string(),
+        listen_port: 7991,
+        allowed_origins: vec![], // Default: NO CORS
+    };
+
+    let state = AppState {
+        tokens_file: config.tokens_file.clone(),
+        policies_dir: config.policies_dir.clone(),
+        audit_logger: Arc::new(AuditLogger::new(config.logs_dir.clone())),
+        trusted_proxies: vec!["127.0.0.1".to_string()],
+    };
+
+    // 1. Default configuration: no CORS header returned for cross-origin request
+    let app_default = create_router(&config, state.clone());
+    let req = Request::builder()
+        .uri("/health")
+        .method("GET")
+        .header("origin", "https://malicious-site.com")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let resp = app_default.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get("access-control-allow-origin").is_none());
+
+    // 2. Configured configuration: only allowed origin gets the header
+    config.allowed_origins = vec!["https://console.agentgate.local".to_string()];
+    let app_configured = create_router(&config, state);
+
+    // Request from allowed origin
+    let req_allowed = Request::builder()
+        .uri("/health")
+        .method("GET")
+        .header("origin", "https://console.agentgate.local")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp_allowed = app_configured.clone().oneshot(req_allowed).await.unwrap();
+    assert_eq!(resp_allowed.status(), StatusCode::OK);
+    assert_eq!(
+        resp_allowed
+            .headers()
+            .get("access-control-allow-origin")
+            .unwrap(),
+        "https://console.agentgate.local"
+    );
+
+    // Request from unauthorized origin
+    let req_unauthorized = Request::builder()
+        .uri("/health")
+        .method("GET")
+        .header("origin", "https://evil.com")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp_unauthorized = app_configured.oneshot(req_unauthorized).await.unwrap();
+    assert!(resp_unauthorized
+        .headers()
+        .get("access-control-allow-origin")
+        .is_none());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+

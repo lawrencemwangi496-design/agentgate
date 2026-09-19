@@ -17,6 +17,7 @@ pub struct AgentGateConfig {
     pub pid_file: PathBuf,
     pub listen_addr: String,
     pub listen_port: u16,
+    pub allowed_origins: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -25,6 +26,8 @@ struct DaemonConfigFile {
     pub listen: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_origins: Option<Vec<String>>,
 }
 
 impl AgentGateConfig {
@@ -36,6 +39,7 @@ impl AgentGateConfig {
 
         let mut listen_addr = "127.0.0.1".to_string();
         let mut listen_port = 7991u16;
+        let mut allowed_origins = Vec::new();
 
         // 1. Read from config.yaml if present
         if let Ok(Some(parsed)) = fs::read_to_string(&config_file)
@@ -46,6 +50,9 @@ impl AgentGateConfig {
             }
             if let Some(p) = parsed.port {
                 listen_port = p;
+            }
+            if let Some(origins) = parsed.allowed_origins {
+                allowed_origins = origins;
             }
         }
 
@@ -63,6 +70,17 @@ impl AgentGateConfig {
         {
             listen_port = p;
         }
+        if let Some(env_origins) = std::env::var("AGENTGATE_CORS_ORIGIN")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            allowed_origins = env_origins
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
 
         let config = Self {
             policies_dir: config_dir.join("policies"),
@@ -75,6 +93,7 @@ impl AgentGateConfig {
             config_dir,
             listen_addr,
             listen_port,
+            allowed_origins,
         };
 
         // Create directories if needed
