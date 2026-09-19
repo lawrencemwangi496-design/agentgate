@@ -122,17 +122,15 @@ pub async fn run_server(
                 .get("https://api.github.com/repos/lawrencemwangi496-design/agentgate/releases/latest")
                 .send()
                 .await
+                && let Ok(json) = res.json::<serde_json::Value>().await
+                && let Some(tag) = json.get("tag_name").and_then(|t| t.as_str())
             {
-                if let Ok(json) = res.json::<serde_json::Value>().await {
-                    if let Some(tag) = json.get("tag_name").and_then(|t| t.as_str()) {
-                        let current_ver = format!("v{}", env!("CARGO_PKG_VERSION"));
-                        if tag != current_ver && !tag.is_empty() {
-                            tracing::info!(
-                                "📢 New AgentGate release available: {} (current: {}). Run 'agentgate update' to upgrade.",
-                                tag, current_ver
-                            );
-                        }
-                    }
+                let current_ver = format!("v{}", env!("CARGO_PKG_VERSION"));
+                if tag != current_ver && !tag.is_empty() {
+                    tracing::info!(
+                        "📢 New AgentGate release available: {} (current: {}). Run 'agentgate update' to upgrade.",
+                        tag, current_ver
+                    );
                 }
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;

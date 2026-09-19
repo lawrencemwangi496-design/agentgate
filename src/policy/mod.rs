@@ -218,10 +218,10 @@ pub fn is_hardened_destructive_guardrail(command: &str, args: &[String]) -> bool
 
     // 5. Reading shadow password files with any viewer
     let readers = ["cat", "less", "more", "head", "tail", "grep", "sed", "awk", "strings", "xxd", "hexdump", "cp", "mv"];
-    if readers.contains(&cmd_base) {
-        if args.iter().any(|a| a.contains("shadow") || a.contains("/etc/shadow") || a.contains("/etc/gshadow")) {
-            return true;
-        }
+    if readers.contains(&cmd_base)
+        && args.iter().any(|a| a.contains("shadow") || a.contains("/etc/shadow") || a.contains("/etc/gshadow"))
+    {
+        return true;
     }
 
     // 6. Root permission sabotage
