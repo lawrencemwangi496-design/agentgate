@@ -121,14 +121,16 @@ impl Policy {
     /// 2. Allow list check: If any rule in `allow` (or legacy `rules`) matches, returns `true`.
     /// 3. If neither matches, returns `false`.
     pub fn matches(&self, command: &str, args: &[String]) -> bool {
+        let cmd_base = command.rsplit('/').next().unwrap_or(command);
+
         // 1. Hardened semantic guardrails (active by default, can be set to false if user explicitly wants)
-        if self.guardrails && is_hardened_destructive_guardrail(command, args) {
+        if self.guardrails && is_hardened_destructive_guardrail(cmd_base, args) {
             return false;
         }
 
         // 2. Custom deny rules check
         for rule in &self.deny {
-            if matches_single_rule(rule, command, args) {
+            if matches_single_rule(rule, command, cmd_base, args) {
                 return false;
             }
         }
@@ -141,7 +143,7 @@ impl Policy {
         };
 
         for rule in allow_rules {
-            if matches_single_rule(rule, command, args) {
+            if matches_single_rule(rule, command, cmd_base, args) {
                 return true;
             }
         }
@@ -286,15 +288,17 @@ pub fn is_hardened_destructive_guardrail(command: &str, args: &[String]) -> bool
 }
 
 /// Helper to match a single PolicyRule against a command and args
-fn matches_single_rule(rule: &PolicyRule, command: &str, args: &[String]) -> bool {
-    // Check command matching (supports "*", exact match, or prefix wildcard like "mkfs*")
+fn matches_single_rule(rule: &PolicyRule, command: &str, cmd_base: &str, args: &[String]) -> bool {
+    let rule_base = rule.command.rsplit('/').next().unwrap_or(&rule.command);
+
+    // Check command matching (supports "*", exact path match, binary basename match, or prefix wildcard like "mkfs*")
     let cmd_matches = if rule.command == "*" {
         true
     } else if rule.command.ends_with('*') {
         let prefix = &rule.command[..rule.command.len() - 1];
-        command.starts_with(prefix)
+        command.starts_with(prefix) || cmd_base.starts_with(prefix)
     } else {
-        rule.command == command
+        rule.command == command || rule_base == cmd_base
     };
 
     if !cmd_matches {

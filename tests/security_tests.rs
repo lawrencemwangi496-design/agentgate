@@ -569,5 +569,85 @@ async fn test_auth_failure_throttling_and_lockout() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_command_name_consistency_under_all_rules() {
+    use agentgate::policy::{Policy, PolicyRule};
+
+    // 1. Guardrail consistency: /bin/rm and rm must both be blocked on destructive commands
+    let standard_policy = Policy {
+        name: "standard".to_string(),
+        description: "Standard policy with allow all and guardrails".to_string(),
+        guardrails: true,
+        allow: vec![PolicyRule {
+            command: "*".to_string(),
+            args: vec![],
+        }],
+        deny: vec![],
+        rules: vec![],
+    };
+
+    assert!(!standard_policy.matches("rm", &["-rf".to_string(), "/".to_string()]));
+    assert!(!standard_policy.matches("/bin/rm", &["-rf".to_string(), "/".to_string()]));
+    assert!(!standard_policy.matches("/usr/bin/rm", &["-rf".to_string(), "/".to_string()]));
+
+    // 2. Custom YAML deny rule consistency: deny rule for "rm" blocks both "rm" and "/bin/rm"
+    let policy_with_deny = Policy {
+        name: "custom-deny".to_string(),
+        description: "Custom deny policy".to_string(),
+        guardrails: false,
+        allow: vec![PolicyRule {
+            command: "*".to_string(),
+            args: vec![],
+        }],
+        deny: vec![PolicyRule {
+            command: "rm".to_string(),
+            args: vec!["-rf".to_string(), "/tmp/protected".to_string()],
+        }],
+        rules: vec![],
+    };
+
+    assert!(!policy_with_deny.matches("rm", &["-rf".to_string(), "/tmp/protected".to_string()]));
+    assert!(!policy_with_deny.matches("/bin/rm", &["-rf".to_string(), "/tmp/protected".to_string()]));
+    assert!(!policy_with_deny.matches("/usr/bin/rm", &["-rf".to_string(), "/tmp/protected".to_string()]));
+
+    // Allowed commands through non-deny target still match identically
+    assert!(policy_with_deny.matches("rm", &["-f".to_string(), "/tmp/allowed".to_string()]));
+    assert!(policy_with_deny.matches("/bin/rm", &["-f".to_string(), "/tmp/allowed".to_string()]));
+
+    // 3. Custom YAML allow rule consistency: allow rule for "systemctl" matches both "systemctl" and "/bin/systemctl"
+    let policy_with_allow = Policy {
+        name: "custom-allow".to_string(),
+        description: "Custom allow policy".to_string(),
+        guardrails: true,
+        allow: vec![PolicyRule {
+            command: "systemctl".to_string(),
+            args: vec!["status".to_string(), "*".to_string()],
+        }],
+        deny: vec![],
+        rules: vec![],
+    };
+
+    assert!(policy_with_allow.matches("systemctl", &["status".to_string(), "nginx".to_string()]));
+    assert!(policy_with_allow.matches("/bin/systemctl", &["status".to_string(), "nginx".to_string()]));
+    assert!(policy_with_allow.matches("/usr/bin/systemctl", &["status".to_string(), "nginx".to_string()]));
+
+    // 4. Policy with absolute path in rule matches both binary basename and path
+    let policy_with_path_rule = Policy {
+        name: "path-rule".to_string(),
+        description: "Policy with absolute path in rule".to_string(),
+        guardrails: true,
+        allow: vec![PolicyRule {
+            command: "/usr/local/bin/deploy-helper".to_string(),
+            args: vec![],
+        }],
+        deny: vec![],
+        rules: vec![],
+    };
+
+    assert!(policy_with_path_rule.matches("/usr/local/bin/deploy-helper", &[]));
+    assert!(policy_with_path_rule.matches("deploy-helper", &[]));
+}
+
+
 
 
