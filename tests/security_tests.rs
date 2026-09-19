@@ -303,3 +303,71 @@ fn test_resolve_client_ip_spoof_prevention() {
     let resolved_direct = resolve_client_ip(trusted_peer, &direct_headers, &trusted_proxies);
     assert_eq!(resolved_direct, "127.0.0.1");
 }
+
+#[test]
+fn test_token_store_concurrent_revocation_and_validation() {
+    use agentgate::auth::TokenStore;
+    use std::sync::Arc;
+    use std::thread;
+
+    let temp_dir = std::env::temp_dir().join(format!("agentgate_test_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let tokens_file = temp_dir.join("tokens.yaml");
+
+    let (raw1, raw2) = {
+        let mut store = TokenStore::load(&tokens_file).unwrap();
+        let r1 = store.create("token1", "test-policy", None).unwrap();
+        let r2 = store.create("token2", "test-policy", None).unwrap();
+        (r1, r2)
+    };
+
+    let tokens_file_arc = Arc::new(tokens_file.clone());
+    let mut handles = Vec::new();
+
+    // Spawn 8 threads that concurrently validate token1 and token2
+    for i in 0..8 {
+        let p = Arc::clone(&tokens_file_arc);
+        let r1 = raw1.clone();
+        let r2 = raw2.clone();
+        handles.push(thread::spawn(move || {
+            for _ in 0..15 {
+                let mut store = TokenStore::load(&p).unwrap();
+                if i % 2 == 0 {
+                    let _ = store.validate(&r1);
+                } else {
+                    let _ = store.validate(&r2);
+                }
+            }
+        }));
+    }
+
+    // Spawn a thread that revokes token2 in the middle of validations
+    let p_revoke = Arc::clone(&tokens_file_arc);
+    handles.push(thread::spawn(move || {
+        let mut store = TokenStore::load(&p_revoke).unwrap();
+        let revoked = store.revoke("token2").unwrap();
+        assert!(revoked);
+    }));
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // Final verification: token2 MUST remain revoked and never be resurrected
+    let mut final_store = TokenStore::load(&tokens_file).unwrap();
+    assert_eq!(final_store.list().len(), 1);
+    assert_eq!(final_store.list()[0].name, "token1");
+    assert!(final_store.list()[0].last_used_at.is_some());
+
+    // Validating token2 must return None
+    let val2 = final_store.validate(&raw2).unwrap();
+    assert!(val2.is_none());
+
+    // Validating token1 must succeed
+    let val1 = final_store.validate(&raw1).unwrap();
+    assert!(val1.is_some());
+
+    // Clean up
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+

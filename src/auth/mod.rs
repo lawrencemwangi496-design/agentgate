@@ -4,9 +4,61 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use subtle::ConstantTimeEq;
+
+static TOKEN_STORE_MUTEX: Mutex<()> = Mutex::new(());
+
+/// Advisory file lock using libc flock to prevent inter-process race conditions
+pub struct FileLock {
+    file: fs::File,
+}
+
+impl FileLock {
+    pub fn acquire_exclusive(lock_path: &Path) -> Result<Self> {
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory {:?}", parent))?;
+        }
+
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)
+            .with_context(|| format!("Failed to open lock file at {:?}", lock_path))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = file.as_raw_fd();
+            let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
+            if ret != 0 {
+                return Err(anyhow::anyhow!(
+                    "Failed to acquire advisory file lock on {:?}: {}",
+                    lock_path,
+                    std::io::Error::last_os_error()
+                ));
+            }
+        }
+
+        Ok(Self { file })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        use std::os::unix::io::AsRawFd;
+        let fd = self.file.as_raw_fd();
+        unsafe {
+            libc::flock(fd, libc::LOCK_UN);
+        }
+    }
+}
 
 /// Stored token entry (token hash, never the raw token)
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -27,28 +79,37 @@ pub struct TokenStore {
 
 impl TokenStore {
     /// Load from tokens.yaml file
-    pub fn load(path: &PathBuf) -> Result<Self> {
-        if !path.exists() {
-            return Ok(Self {
-                tokens: Vec::new(),
-                path: path.clone(),
-            });
+    pub fn load(path: &Path) -> Result<Self> {
+        let mut store = Self {
+            tokens: Vec::new(),
+            path: path.to_path_buf(),
+        };
+        store.reload_internal()?;
+        Ok(store)
+    }
+
+    fn reload_internal(&mut self) -> Result<()> {
+        if !self.path.exists() {
+            self.tokens.clear();
+            return Ok(());
         }
 
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read token store file at {:?}", path))?;
+        let content = fs::read_to_string(&self.path)
+            .with_context(|| format!("Failed to read token store file at {:?}", self.path))?;
+
+        if content.trim().is_empty() {
+            self.tokens.clear();
+            return Ok(());
+        }
 
         let tokens: Vec<StoredToken> =
             serde_yaml::from_str(&content).with_context(|| "Failed to parse token store YAML")?;
 
-        Ok(Self {
-            tokens,
-            path: path.clone(),
-        })
+        self.tokens = tokens;
+        Ok(())
     }
 
-    /// Save to tokens.yaml file atomically using a temporary file and rename
-    pub fn save(&self) -> Result<()> {
+    fn save_internal(&self) -> Result<()> {
         let content = serde_yaml::to_string(&self.tokens)
             .with_context(|| "Failed to serialize token store")?;
 
@@ -80,6 +141,36 @@ impl TokenStore {
         Ok(())
     }
 
+    fn with_lock<T, F>(&mut self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self) -> Result<T>,
+    {
+        let _thread_guard = TOKEN_STORE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let lock_path = self.path.with_extension("lock");
+        let _file_guard = FileLock::acquire_exclusive(&lock_path)?;
+
+        // Reload the freshest tokens from disk while holding the lock
+        self.reload_internal()?;
+
+        f(self)
+    }
+
+    /// Save to tokens.yaml file atomically using a temporary file and rename
+    pub fn save(&self) -> Result<()> {
+        let _thread_guard = TOKEN_STORE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let lock_path = self.path.with_extension("lock");
+        let _file_guard = FileLock::acquire_exclusive(&lock_path)?;
+        self.save_internal()
+    }
+
+    /// Reload the token store from disk under lock
+    pub fn reload(&mut self) -> Result<()> {
+        let _thread_guard = TOKEN_STORE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let lock_path = self.path.with_extension("lock");
+        let _file_guard = FileLock::acquire_exclusive(&lock_path)?;
+        self.reload_internal()
+    }
+
     /// Create a new token. Returns the raw token string (shown once to user).
     /// Stores only the SHA-256 hash.
     pub fn create(
@@ -88,81 +179,87 @@ impl TokenStore {
         policy: &str,
         expires_in: Option<chrono::Duration>,
     ) -> Result<String> {
-        // Check if token with the same name already exists
-        if self.tokens.iter().any(|t| t.name == name) {
-            anyhow::bail!("Token with name '{}' already exists", name);
-        }
+        self.with_lock(|store| {
+            // Check if token with the same name already exists
+            if store.tokens.iter().any(|t| t.name == name) {
+                anyhow::bail!("Token with name '{}' already exists", name);
+            }
 
-        let mut rng = rand::rng();
-        let mut bytes = [0u8; 32];
-        rng.fill(&mut bytes);
+            let mut rng = rand::rng();
+            let mut bytes = [0u8; 32];
+            rng.fill(&mut bytes);
 
-        let raw_token = format!("ag_{}", hex::encode(bytes));
+            let raw_token = format!("ag_{}", hex::encode(bytes));
 
-        let mut hasher = Sha256::new();
-        hasher.update(raw_token.as_bytes());
-        let hash = hex::encode(hasher.finalize());
+            let mut hasher = Sha256::new();
+            hasher.update(raw_token.as_bytes());
+            let hash = hex::encode(hasher.finalize());
 
-        let now = Utc::now();
-        let expires_at = expires_in.map(|duration| now + duration);
+            let now = Utc::now();
+            let expires_at = expires_in.map(|duration| now + duration);
 
-        let stored_token = StoredToken {
-            name: name.to_string(),
-            hash,
-            policy: policy.to_string(),
-            created_at: now,
-            expires_at,
-            last_used_at: None,
-        };
+            let stored_token = StoredToken {
+                name: name.to_string(),
+                hash,
+                policy: policy.to_string(),
+                created_at: now,
+                expires_at,
+                last_used_at: None,
+            };
 
-        self.tokens.push(stored_token);
-        self.save()?;
+            store.tokens.push(stored_token);
+            store.save_internal()?;
 
-        Ok(raw_token)
+            Ok(raw_token)
+        })
     }
 
     /// Validate a raw token string. Returns the StoredToken if valid and not expired.
     /// Also updates last_used_at. Uses constant-time hash comparison to prevent timing leaks.
     pub fn validate(&mut self, raw_token: &str) -> Result<Option<StoredToken>> {
-        let mut hasher = Sha256::new();
-        hasher.update(raw_token.as_bytes());
-        let hash = hex::encode(hasher.finalize());
+        self.with_lock(|store| {
+            let mut hasher = Sha256::new();
+            hasher.update(raw_token.as_bytes());
+            let hash = hex::encode(hasher.finalize());
 
-        let now = Utc::now();
+            let now = Utc::now();
 
-        let mut found_index = None;
-        for (i, token) in self.tokens.iter().enumerate() {
-            let is_match: bool = token.hash.as_bytes().ct_eq(hash.as_bytes()).into();
-            if is_match {
-                if token.expires_at.is_some_and(|expires_at| now > expires_at) {
-                    return Ok(None); // Expired
+            let mut found_index = None;
+            for (i, token) in store.tokens.iter().enumerate() {
+                let is_match: bool = token.hash.as_bytes().ct_eq(hash.as_bytes()).into();
+                if is_match {
+                    if token.expires_at.is_some_and(|expires_at| now > expires_at) {
+                        return Ok(None); // Expired
+                    }
+                    found_index = Some(i);
+                    break;
                 }
-                found_index = Some(i);
-                break;
             }
-        }
 
-        if let Some(i) = found_index {
-            self.tokens[i].last_used_at = Some(now);
-            let token_clone = self.tokens[i].clone();
-            self.save()?;
-            Ok(Some(token_clone))
-        } else {
-            Ok(None)
-        }
+            if let Some(i) = found_index {
+                store.tokens[i].last_used_at = Some(now);
+                let token_clone = store.tokens[i].clone();
+                store.save_internal()?;
+                Ok(Some(token_clone))
+            } else {
+                Ok(None)
+            }
+        })
     }
 
     /// Revoke a token by name
     pub fn revoke(&mut self, name: &str) -> Result<bool> {
-        let initial_len = self.tokens.len();
-        self.tokens.retain(|t| t.name != name);
+        self.with_lock(|store| {
+            let initial_len = store.tokens.len();
+            store.tokens.retain(|t| t.name != name);
 
-        if self.tokens.len() < initial_len {
-            self.save()?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+            if store.tokens.len() < initial_len {
+                store.save_internal()?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
     }
 
     /// List all tokens
