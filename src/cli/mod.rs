@@ -789,6 +789,29 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
 }
 
 pub fn handle_stop(config: &AgentGateConfig) -> Result<()> {
+    // 1. Check if systemd service is active first
+    let is_systemd = std::process::Command::new("systemctl")
+        .args(["is-active", "--quiet", "agentgate"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if is_systemd {
+        println!("Stopping AgentGate systemd service...");
+        let status = std::process::Command::new("systemctl")
+            .args(["stop", "agentgate"])
+            .status();
+
+        if let Ok(s) = status && s.success() {
+            println!("🛑 AgentGate systemd service stopped.");
+            return Ok(());
+        } else {
+            eprintln!("❌ Failed to stop systemd service: root privileges required.");
+            eprintln!("💡 Run with sudo: sudo systemctl stop agentgate (or sudo agentgate stop)");
+            bail!("Requires sudo to stop AgentGate systemd service");
+        }
+    }
+
     let Some(pid) = find_running_daemon(config) else {
         // Port-listening fallback check
         let addr = format!("{}:{}", config.listen_addr, config.listen_port);
@@ -801,16 +824,13 @@ pub fn handle_stop(config: &AgentGateConfig) -> Result<()> {
         .is_ok();
 
         if port_open {
-            println!(
+            eprintln!(
                 "⚠️  No AgentGate PID file found, but port {} is actively listening.",
                 config.listen_port
             );
-            println!("💡 If AgentGate is running under systemd or root, stop it with:");
-            println!("   sudo systemctl stop agentgate");
-            println!(
-                "   or terminate the process on port {}: sudo fuser -k {}/tcp",
-                config.listen_port, config.listen_port
-            );
+            eprintln!("💡 If AgentGate is running under another user, terminate it with:");
+            eprintln!("   sudo fuser -k {}/tcp", config.listen_port);
+            bail!("AgentGate port is in use by another process or user");
         } else {
             println!("⚪ AgentGate is not running.");
         }
@@ -860,6 +880,28 @@ pub fn handle_stop(config: &AgentGateConfig) -> Result<()> {
 }
 
 pub fn handle_restart(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
+    let is_systemd = std::process::Command::new("systemctl")
+        .args(["is-active", "--quiet", "agentgate"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if is_systemd {
+        println!("Restarting AgentGate systemd service...");
+        let status = std::process::Command::new("systemctl")
+            .args(["restart", "agentgate"])
+            .status();
+
+        if let Ok(s) = status && s.success() {
+            println!("🟢 AgentGate systemd service restarted.");
+            return Ok(());
+        } else {
+            eprintln!("❌ Failed to restart systemd service: root privileges required.");
+            eprintln!("💡 Run with sudo: sudo systemctl restart agentgate (or sudo agentgate restart)");
+            bail!("Requires sudo to restart AgentGate systemd service");
+        }
+    }
+
     handle_stop(config)?;
     std::thread::sleep(std::time::Duration::from_millis(300));
     handle_start(args, config)?;
