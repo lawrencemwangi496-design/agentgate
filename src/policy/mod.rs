@@ -172,7 +172,55 @@ fn is_dangerous_wipe_target(arg: &str) -> bool {
         return true;
     }
     let norm = normalize_path_str(trimmed);
-    norm == "/" || norm == "/*" || norm == "/root" || norm == "/etc" || norm == "/bin" || norm == "/usr" || norm == "/var"
+
+    // Hardened system-critical root mountpoints & top-level directories
+    const PROTECTED_TARGETS: &[&str] = &[
+        "/",
+        "/root",
+        "/etc",
+        "/bin",
+        "/usr",
+        "/var",
+        "/boot",
+        "/lib",
+        "/lib64",
+        "/sbin",
+        "/home",
+        "/opt",
+        "/srv",
+        "/mnt",
+    ];
+
+    for &target in PROTECTED_TARGETS {
+        if norm == target || norm == format!("{}/*", target) {
+            return true;
+        }
+    }
+
+    // AgentGate's own configuration, token, policy, and audit log directories
+    if norm == "/etc/agentgate"
+        || norm.starts_with("/etc/agentgate/")
+        || norm == "/var/log/agentgate"
+        || norm.starts_with("/var/log/agentgate/")
+        || norm == "~/.config/agentgate"
+        || norm.starts_with("~/.config/agentgate/")
+        || norm == "~/.agentgate"
+        || norm.starts_with("~/.agentgate/")
+    {
+        return true;
+    }
+
+    // Protect AgentGate's user config directory dynamically if home dir is resolved
+    if let Some(user_home) = dirs::home_dir() {
+        let agentgate_user_cfg = user_home.join(".config").join("agentgate");
+        let agentgate_user_cfg_str = agentgate_user_cfg.to_string_lossy();
+        let norm_agentgate = normalize_path_str(&agentgate_user_cfg_str);
+        if norm == norm_agentgate || norm.starts_with(&format!("{}/", norm_agentgate)) {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Hardened semantic check for destructive actions (prevents flag-splitting & flag-permutation bypasses)

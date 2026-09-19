@@ -158,6 +158,38 @@ fn test_guardrail_policy_behavior() {
     assert!(!standard_policy.matches("cat", &["/dev/null".to_string(), "/etc/shadow".to_string()]));
     assert!(!standard_policy.matches("head", &["/etc/shadow".to_string()]));
     assert!(!standard_policy.matches("strings", &["/etc/gshadow".to_string()]));
+
+    // Extended Guardrail Protected Paths (Phase 1, Item 6)
+    let extended_protected_targets = [
+        "/boot",
+        "/lib",
+        "/lib64",
+        "/sbin",
+        "/home",
+        "/opt",
+        "/srv",
+        "/mnt",
+        "/etc/agentgate",
+        "/etc/agentgate/tokens.yaml",
+        "/etc/agentgate/policies",
+        "/var/log/agentgate",
+        "/var/log/agentgate/audit.jsonl",
+        "~/.config/agentgate",
+        "~/.config/agentgate/tokens.yaml",
+    ];
+
+    for target in extended_protected_targets {
+        assert!(
+            !standard_policy.matches("rm", &["-rf".to_string(), target.to_string()]),
+            "Expected wipe of protected target '{}' to be blocked by guardrail",
+            target
+        );
+        assert!(
+            !standard_policy.matches("chmod", &["-R".to_string(), "777".to_string(), target.to_string()]),
+            "Expected recursive chmod 777 of protected target '{}' to be blocked by guardrail",
+            target
+        );
+    }
 }
 
 #[test]
