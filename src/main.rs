@@ -75,6 +75,9 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
+        Some(Commands::Action(args)) => {
+            agentgate::client::handle_action(args).await?;
+        }
         Some(Commands::Shell(args)) => {
             agentgate::client::handle_shell(args.server, args.token, &config).await?;
         }

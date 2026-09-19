@@ -11,7 +11,7 @@ use crate::policy::PolicyStore;
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -48,17 +48,40 @@ pub struct ExecSuccessResponse {
     pub truncated: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
     pub message: String,
     pub exit_code: i32,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct ActionRequest {
+    #[serde(default)]
+    pub params: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StepResult {
+    pub step: String,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ActionResponse {
+    pub action: String,
+    pub success: bool,
+    pub total_duration_ms: u64,
+    pub steps: Vec<StepResult>,
 }
 
 /// Helper function to create the Axum router with security layers applied
@@ -68,7 +91,8 @@ pub fn create_router(config: &AgentGateConfig, state: AppState) -> Router {
         .route("/console", get(console_handler))
         .route("/health", get(health_handler))
         .route("/v1/health", get(health_handler))
-        .route("/v1/exec", post(exec_handler));
+        .route("/v1/exec", post(exec_handler))
+        .route("/v1/action/{name}", post(action_handler));
 
     // Hardened CORS: Default to NO CORS headers.
     // Cross-origin browser requests are strictly denied by the browser's Same-Origin Policy.
@@ -390,6 +414,37 @@ async fn exec_handler(
         }
     };
 
+    // Verify token is authorized for arbitrary execution (not restricted to named actions)
+    if !stored_token.can_exec() {
+        warn!(
+            "Token '{}' is restricted to named actions only and cannot invoke arbitrary exec",
+            stored_token.name
+        );
+        let _ = state.audit_logger.log(&AuditEntry {
+            timestamp: Utc::now(),
+            token_name: stored_token.name.clone(),
+            command: command_raw.to_string(),
+            policy: stored_token.policy.clone(),
+            result: AuditResult::Denied,
+            reason: Some("Token is restricted to named actions only and cannot invoke exec".to_string()),
+            exit_code: Some(1),
+            duration_ms: Some(0),
+            remote_addr: remote_addr.clone(),
+        });
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "forbidden".to_string(),
+                message: format!(
+                    "Token '{}' is restricted to named actions only and cannot execute arbitrary commands.",
+                    stored_token.name
+                ),
+                exit_code: 1,
+            }),
+        )
+            .into_response();
+    }
+
     // 2. Parse command and check for shell injection characters
     let parsed_cmd = match ParsedCommand::parse(command_raw) {
         Ok(cmd) => cmd,
@@ -544,6 +599,359 @@ async fn exec_handler(
             stderr: exec_res.stderr,
             duration_ms: exec_res.duration_ms,
             truncated: exec_res.truncated,
+        }),
+    )
+        .into_response()
+}
+
+async fn action_handler(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    Path(action_name): Path<String>,
+    headers: HeaderMap,
+    payload: Option<Json<ActionRequest>>,
+) -> Response {
+    let peer_ip = peer_addr.ip();
+    let remote_addr = resolve_client_ip(peer_addr, &headers, &state.trusted_proxies);
+
+    // 0. Check lockout
+    if let Some(remaining) = state.auth_throttler.check_lockout(&peer_ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ErrorResponse {
+                error: "too_many_requests".to_string(),
+                message: format!(
+                    "Too many authentication failures. Locked out for {} seconds",
+                    remaining.as_secs().max(1)
+                ),
+                exit_code: -1,
+            }),
+        )
+            .into_response();
+    }
+
+    // 1. Authenticate Bearer Token
+    let auth_header = match headers.get(header::AUTHORIZATION) {
+        Some(h) => match h.to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                state.auth_throttler.record_failure(peer_ip);
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        error: "unauthorized".to_string(),
+                        message: "Invalid Authorization header encoding".to_string(),
+                        exit_code: -1,
+                    }),
+                )
+                    .into_response();
+            }
+        },
+        None => {
+            state.auth_throttler.record_failure(peer_ip);
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorResponse {
+                    error: "unauthorized".to_string(),
+                    message: "Missing Authorization header with Bearer token".to_string(),
+                    exit_code: -1,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let token_str = if let Some(token) = auth_header.strip_prefix("Bearer ") {
+        token.trim()
+    } else {
+        state.auth_throttler.record_failure(peer_ip);
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                error: "unauthorized".to_string(),
+                message: "Authorization header must be in format 'Bearer <token>'".to_string(),
+                exit_code: -1,
+            }),
+        )
+            .into_response();
+    };
+
+    let stored_token = {
+        let mut store = match TokenStore::load(&state.tokens_file) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to load token store: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "server_error".to_string(),
+                        message: "Failed to read token store".to_string(),
+                        exit_code: -1,
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        match store.validate(token_str) {
+            Ok(Some(t)) => {
+                state.auth_throttler.record_success(&peer_ip);
+                t
+            }
+            Ok(None) => {
+                state.auth_throttler.record_failure(peer_ip);
+                let _ = state.audit_logger.log(&AuditEntry {
+                    timestamp: Utc::now(),
+                    token_name: "unauthenticated".to_string(),
+                    command: format!("action:{}", action_name),
+                    policy: "none".to_string(),
+                    result: AuditResult::Denied,
+                    reason: Some("Invalid or expired token".to_string()),
+                    exit_code: Some(-1),
+                    duration_ms: Some(0),
+                    remote_addr: remote_addr.clone(),
+                });
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        error: "unauthorized".to_string(),
+                        message: "Invalid or expired token".to_string(),
+                        exit_code: -1,
+                    }),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                error!("Error validating token: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "server_error".to_string(),
+                        message: "Internal validation failure".to_string(),
+                        exit_code: -1,
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    // 2. Check action authorization
+    if !stored_token.can_run_action(&action_name) {
+        warn!(
+            "Token '{}' is not authorized to execute action '{}'",
+            stored_token.name, action_name
+        );
+        let _ = state.audit_logger.log(&AuditEntry {
+            timestamp: Utc::now(),
+            token_name: stored_token.name.clone(),
+            command: format!("action:{}", action_name),
+            policy: stored_token.policy.clone(),
+            result: AuditResult::Denied,
+            reason: Some(format!("Token is not authorized to run action '{}'", action_name)),
+            exit_code: Some(1),
+            duration_ms: Some(0),
+            remote_addr: remote_addr.clone(),
+        });
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "forbidden".to_string(),
+                message: format!(
+                    "Token '{}' is not authorized to execute action '{}'",
+                    stored_token.name, action_name
+                ),
+                exit_code: 1,
+            }),
+        )
+            .into_response();
+    }
+
+    // 3. Load policy from store
+    let policy_store = match PolicyStore::load(&state.policies_dir) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Failed to load policy store: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "server_error".to_string(),
+                    message: "Failed to load policy store".to_string(),
+                    exit_code: -1,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let policy = match policy_store.get(&stored_token.policy) {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "policy_not_found".to_string(),
+                    message: format!("Policy '{}' not found", stored_token.policy),
+                    exit_code: -1,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let action = match policy.get_action(&action_name) {
+        Some(a) => a,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "action_not_found".to_string(),
+                    message: format!(
+                        "Action '{}' is not defined in policy '{}'",
+                        action_name, stored_token.policy
+                    ),
+                    exit_code: 1,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let params = payload.map(|Json(p)| p.params).unwrap_or_default();
+    let rendered_steps = match action.render_steps(&params) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_parameters".to_string(),
+                    message: e.to_string(),
+                    exit_code: -1,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let start_total = std::time::Instant::now();
+    let mut step_results = Vec::new();
+    let mut all_success = true;
+
+    for step in rendered_steps {
+        let parsed_cmd = match ParsedCommand::parse(&step) {
+            Ok(c) => c,
+            Err(e) => {
+                let reason = e.to_string();
+                let _ = state.audit_logger.log(&AuditEntry {
+                    timestamp: Utc::now(),
+                    token_name: stored_token.name.clone(),
+                    command: step.clone(),
+                    policy: stored_token.policy.clone(),
+                    result: AuditResult::InjectionBlocked,
+                    reason: Some(reason.clone()),
+                    exit_code: Some(-1),
+                    duration_ms: Some(0),
+                    remote_addr: remote_addr.clone(),
+                });
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "injection_blocked".to_string(),
+                        message: reason,
+                        exit_code: -1,
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        if policy.guardrails && crate::policy::is_hardened_destructive_guardrail(&parsed_cmd.binary, &parsed_cmd.args) {
+            let reason = "Destructive guardrail violation in action step".to_string();
+            let _ = state.audit_logger.log(&AuditEntry {
+                timestamp: Utc::now(),
+                token_name: stored_token.name.clone(),
+                command: step.clone(),
+                policy: stored_token.policy.clone(),
+                result: AuditResult::Denied,
+                reason: Some(reason.clone()),
+                exit_code: Some(1),
+                duration_ms: Some(0),
+                remote_addr: remote_addr.clone(),
+            });
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "guardrail_blocked".to_string(),
+                    message: reason,
+                    exit_code: 1,
+                }),
+            )
+                .into_response();
+        }
+
+        let exec_res = match executor::execute(&parsed_cmd, 60, stored_token.os_user.as_deref()).await {
+            Ok(r) => r,
+            Err(e) => {
+                let reason = e.to_string();
+                let _ = state.audit_logger.log(&AuditEntry {
+                    timestamp: Utc::now(),
+                    token_name: stored_token.name.clone(),
+                    command: step.clone(),
+                    policy: stored_token.policy.clone(),
+                    result: AuditResult::Error,
+                    reason: Some(reason.clone()),
+                    exit_code: Some(-1),
+                    duration_ms: Some(0),
+                    remote_addr: remote_addr.clone(),
+                });
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "execution_failed".to_string(),
+                        message: reason,
+                        exit_code: -1,
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        let is_ok = exec_res.exit_code == 0;
+        let _ = state.audit_logger.log(&AuditEntry {
+            timestamp: Utc::now(),
+            token_name: stored_token.name.clone(),
+            command: step.clone(),
+            policy: stored_token.policy.clone(),
+            result: if is_ok { AuditResult::Allowed } else { AuditResult::Denied },
+            reason: None,
+            exit_code: Some(exec_res.exit_code),
+            duration_ms: Some(exec_res.duration_ms),
+            remote_addr: remote_addr.clone(),
+        });
+
+        step_results.push(StepResult {
+            step,
+            exit_code: exec_res.exit_code,
+            stdout: exec_res.stdout,
+            stderr: exec_res.stderr,
+            duration_ms: exec_res.duration_ms,
+        });
+
+        if !is_ok {
+            all_success = false;
+            if action.stop_on_failure {
+                break;
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(ActionResponse {
+            action: action_name,
+            success: all_success,
+            total_duration_ms: start_total.elapsed().as_millis() as u64,
+            steps: step_results,
         }),
     )
         .into_response()

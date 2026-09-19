@@ -98,6 +98,7 @@ fn test_policy_allowlist_matching() {
                 args: vec![],
             },
         ],
+        actions: std::collections::HashMap::new(),
     };
 
     // 1. Allowed commands
@@ -129,6 +130,7 @@ fn test_guardrail_policy_behavior() {
         }],
         deny: default_guardrails(),
         rules: vec![],
+        actions: std::collections::HashMap::new(),
     };
 
     // Freedom: Diagnostic and safe ops are allowed
@@ -205,6 +207,7 @@ fn test_policy_guardrails_override() {
         }],
         deny: vec![],
         rules: vec![],
+        actions: std::collections::HashMap::new(),
     };
 
     // With guardrails: false, deliberate allowed commands are honored!
@@ -348,8 +351,8 @@ fn test_token_store_concurrent_revocation_and_validation() {
 
     let (raw1, raw2) = {
         let mut store = TokenStore::load(&tokens_file).unwrap();
-        let r1 = store.create("token1", "test-policy", None, None, None).unwrap();
-        let r2 = store.create("token2", "test-policy", None, None, None).unwrap();
+        let r1 = store.create("token1", "test-policy", None, None, None, None).unwrap();
+        let r2 = store.create("token2", "test-policy", None, None, None, None).unwrap();
         (r1, r2)
     };
 
@@ -584,6 +587,7 @@ fn test_command_name_consistency_under_all_rules() {
         }],
         deny: vec![],
         rules: vec![],
+        actions: std::collections::HashMap::new(),
     };
 
     assert!(!standard_policy.matches("rm", &["-rf".to_string(), "/".to_string()]));
@@ -604,6 +608,7 @@ fn test_command_name_consistency_under_all_rules() {
             args: vec!["-rf".to_string(), "/tmp/protected".to_string()],
         }],
         rules: vec![],
+        actions: std::collections::HashMap::new(),
     };
 
     assert!(!policy_with_deny.matches("rm", &["-rf".to_string(), "/tmp/protected".to_string()]));
@@ -625,6 +630,7 @@ fn test_command_name_consistency_under_all_rules() {
         }],
         deny: vec![],
         rules: vec![],
+        actions: std::collections::HashMap::new(),
     };
 
     assert!(policy_with_allow.matches("systemctl", &["status".to_string(), "nginx".to_string()]));
@@ -642,6 +648,7 @@ fn test_command_name_consistency_under_all_rules() {
         }],
         deny: vec![],
         rules: vec![],
+        actions: std::collections::HashMap::new(),
     };
 
     assert!(policy_with_path_rule.matches("/usr/local/bin/deploy-helper", &[]));
@@ -659,7 +666,7 @@ fn test_per_token_os_user_creation_and_validation() {
     let raw_token = {
         let mut store = TokenStore::load(&tokens_file).unwrap();
         store
-            .create("isolated-agent", "standard", None, Some("ag-isolated".to_string()), None)
+            .create("isolated-agent", "standard", None, Some("ag-isolated".to_string()), None, None)
             .unwrap()
     };
 
@@ -785,6 +792,7 @@ fn test_generate_sudoers_content_and_policy_integration() {
         ],
         allow: vec![],
         deny: vec![],
+        actions: std::collections::HashMap::new(),
     };
     let sudoers_gen = generate_sudoers_from_policy(&exact_policy, "ag-agent").unwrap();
     assert!(sudoers_gen.contains("ag-agent ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx"));
@@ -802,6 +810,7 @@ fn test_generate_sudoers_content_and_policy_integration() {
         ],
         allow: vec![],
         deny: vec![],
+        actions: std::collections::HashMap::new(),
     };
     let wild_res = generate_sudoers_from_policy(&wildcard_policy, "ag-agent");
     assert!(wild_res.is_err());
@@ -820,6 +829,7 @@ fn test_generate_sudoers_content_and_policy_integration() {
         ],
         allow: vec![],
         deny: vec![],
+        actions: std::collections::HashMap::new(),
     };
     let gtfo_res = generate_sudoers_from_policy(&gtfobins_policy, "ag-agent");
     assert!(gtfo_res.is_err());
@@ -836,6 +846,135 @@ fn test_admin_tier_duration_check() {
     assert!(twelve_hours <= one_day);
     assert!(one_day <= chrono::Duration::hours(24));
     assert!(two_days > chrono::Duration::hours(24));
+}
+
+#[test]
+fn test_action_parameter_substitution_and_injection_blocking() {
+    use agentgate::policy::PolicyAction;
+    use std::collections::HashMap;
+
+    let action = PolicyAction {
+        steps: vec![
+            "/usr/bin/git -C /var/www/{site} checkout {branch}".to_string(),
+            "/usr/bin/systemctl reload nginx".to_string(),
+        ],
+        stop_on_failure: true,
+        description: Some("Deploy site".to_string()),
+    };
+
+    // Valid parameter substitution
+    let mut valid_params = HashMap::new();
+    valid_params.insert("site".to_string(), "mysite".to_string());
+    valid_params.insert("branch".to_string(), "main".to_string());
+
+    let rendered = action.render_steps(&valid_params).unwrap();
+    assert_eq!(rendered.len(), 2);
+    assert_eq!(rendered[0], "/usr/bin/git -C /var/www/mysite checkout main");
+    assert_eq!(rendered[1], "/usr/bin/systemctl reload nginx");
+
+    // Injection attempt with shell metacharacters in parameter value
+    let mut injection_params = HashMap::new();
+    injection_params.insert("site".to_string(), "mysite; rm -rf /".to_string());
+    injection_params.insert("branch".to_string(), "main".to_string());
+
+    let res = action.render_steps(&injection_params);
+    assert!(res.is_err());
+    assert!(res.unwrap_err().to_string().contains("disallowed metacharacter"));
+
+    let mut pipe_params = HashMap::new();
+    pipe_params.insert("branch".to_string(), "main | cat /etc/shadow".to_string());
+    let res_pipe = action.render_steps(&pipe_params);
+    assert!(res_pipe.is_err());
+    assert!(res_pipe.unwrap_err().to_string().contains("disallowed metacharacter"));
+}
+
+#[test]
+fn test_action_permissions_enforcement() {
+    use agentgate::auth::StoredToken;
+    use chrono::Utc;
+
+    // Token restricted to actions ["deploy"]
+    let action_token = StoredToken {
+        name: "ci-pipeline".to_string(),
+        hash: "dummyhash".to_string(),
+        policy: "pipeline".to_string(),
+        created_at: Utc::now(),
+        expires_at: None,
+        last_used_at: None,
+        os_user: None,
+        tier: None,
+        actions: Some(vec!["deploy".to_string()]),
+    };
+
+    // Arbitrary exec is strictly denied for actions-only token
+    assert!(!action_token.can_exec());
+    // Only "deploy" action is allowed
+    assert!(action_token.can_run_action("deploy"));
+    assert!(!action_token.can_run_action("restart"));
+    assert!(!action_token.can_run_action("cleanup"));
+
+    // Standard unrestricted token (actions: None)
+    let standard_token = StoredToken {
+        name: "standard-agent".to_string(),
+        hash: "dummyhash2".to_string(),
+        policy: "standard".to_string(),
+        created_at: Utc::now(),
+        expires_at: None,
+        last_used_at: None,
+        os_user: None,
+        tier: None,
+        actions: None,
+    };
+
+    assert!(standard_token.can_exec());
+    assert!(standard_token.can_run_action("deploy"));
+    assert!(standard_token.can_run_action("anything"));
+}
+
+#[test]
+fn test_policy_action_retrieval_and_serialization() {
+    use agentgate::policy::{Policy, PolicyAction};
+    use std::collections::HashMap;
+
+    let mut actions = HashMap::new();
+    actions.insert(
+        "deploy".to_string(),
+        PolicyAction {
+            steps: vec![
+                "/usr/bin/git -C /var/www/site pull --ff-only".to_string(),
+                "/usr/bin/systemctl reload nginx".to_string(),
+            ],
+            stop_on_failure: true,
+            description: Some("Deploy updated site".to_string()),
+        },
+    );
+
+    let policy = Policy {
+        name: "pipeline".to_string(),
+        description: "CI/CD automated pipeline policy".to_string(),
+        guardrails: true,
+        allow: vec![],
+        deny: vec![],
+        rules: vec![],
+        actions,
+    };
+
+    assert!(policy.get_action("deploy").is_some());
+    assert!(policy.get_action("nonexistent").is_none());
+
+    let act = policy.get_action("deploy").unwrap();
+    assert_eq!(act.steps.len(), 2);
+    assert!(act.stop_on_failure);
+
+    // Verify YAML serialization and roundtrip
+    let yaml_str = serde_yaml::to_string(&policy).unwrap();
+    assert!(yaml_str.contains("actions:"));
+    assert!(yaml_str.contains("deploy:"));
+    assert!(yaml_str.contains("stop_on_failure: true"));
+
+    let loaded: Policy = serde_yaml::from_str(&yaml_str).unwrap();
+    assert_eq!(loaded.name, "pipeline");
+    assert!(loaded.get_action("deploy").is_some());
 }
 
 

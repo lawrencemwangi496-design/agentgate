@@ -46,6 +46,10 @@ pub enum Commands {
     #[command(name = "exec", alias = "run")]
     Exec(ExecArgs),
 
+    /// Execute a named multi-step action defined in a policy (e.g. CI/CD pipeline)
+    #[command(name = "action", alias = "act")]
+    Action(ActionArgs),
+
     /// Interactive TUI shell to execute commands directly (like gh / local console)
     #[command(name = "shell", aliases = ["console", "connect", "sh"])]
     Shell(ShellArgs),
@@ -200,6 +204,28 @@ pub struct ExecArgs {
     pub quiet: bool,
 }
 
+#[derive(Args, Clone, Debug)]
+pub struct ActionArgs {
+    /// Name of the action defined in the policy (e.g. 'deploy')
+    pub name: String,
+
+    /// Optional action parameters formatted as key=value (e.g. -p branch=main)
+    #[arg(long = "param", short = 'p')]
+    pub params: Vec<String>,
+
+    /// Override server URL (e.g. https://127.0.0.1:7991)
+    #[arg(long)]
+    pub server: Option<String>,
+
+    /// Override auth token
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Output full JSON response from server
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
 #[derive(Args, Clone, Debug, Default)]
 pub struct LoginArgs {
     /// AgentGate authentication token (starts with ag_)
@@ -259,6 +285,10 @@ pub enum TokenSubcommand {
         /// Security tier ('read', 'ops', 'admin') with pre-configured OS user and narrow sudoers
         #[arg(long)]
         tier: Option<String>,
+
+        /// Comma-separated list of allowed named actions for pipeline tokens (e.g. 'deploy,test'). Disables arbitrary exec.
+        #[arg(long)]
+        actions: Option<String>,
     },
 
     /// List all generated tokens
@@ -333,6 +363,8 @@ struct TokenRow {
     created_at: String,
     #[tabled(rename = "EXPIRES")]
     expires: String,
+    #[tabled(rename = "ACTIONS")]
+    actions: String,
     #[tabled(rename = "LAST USED")]
     last_used_at: String,
 }
@@ -831,6 +863,7 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
             user_mode,
             os_user,
             tier,
+            actions,
         } => {
             let normalized_tier = tier.as_deref().map(|t| t.to_lowercase());
 
@@ -934,12 +967,20 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
                 );
             }
 
+            let parsed_actions = actions.map(|acts| {
+                acts.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<String>>()
+            });
+
             let raw_token = store.create(
                 &name,
                 &final_policy,
                 final_duration,
                 bound_os_user.clone(),
                 normalized_tier.clone(),
+                parsed_actions.clone(),
             )?;
 
             let expires_display = match final_duration {
@@ -954,11 +995,17 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
                 None => "Never (Permanent long-lasting token)".to_string(),
             };
 
+            let actions_display = match &parsed_actions {
+                Some(acts) => acts.join(", "),
+                None => "* (Arbitrary execution permitted)".to_string(),
+            };
+
             println!("\n✅ Token created successfully!");
             println!("----------------------------------------------------------------------");
             println!("NAME:       {}", name);
             println!("TIER:       {}", normalized_tier.as_deref().unwrap_or("custom"));
             println!("POLICY:     {}", final_policy);
+            println!("ACTIONS:    {}", actions_display);
             println!("OS USER:    {}", bound_os_user.as_deref().unwrap_or("daemon default (no user isolation)"));
             println!("EXPIRES:    {}", expires_display);
             println!("TOKEN:      {}", raw_token);
@@ -996,6 +1043,11 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
                     os_user: t.os_user.clone().unwrap_or_else(|| "default".to_string()),
                     created_at: t.created_at.format("%Y-%m-%d %H:%M").to_string(),
                     expires: format_expiry(t.expires_at),
+                    actions: t
+                        .actions
+                        .as_ref()
+                        .map(|a| a.join(", "))
+                        .unwrap_or_else(|| "*".to_string()),
                     last_used_at: t
                         .last_used_at
                         .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
@@ -1074,6 +1126,7 @@ pub fn handle_policy(cmd: Option<PolicySubcommand>, config: &AgentGateConfig) ->
                 }],
                 deny: crate::policy::default_guardrails(),
                 rules: Vec::new(),
+                actions: std::collections::HashMap::new(),
             };
             store.save_policy(&new_policy)?;
             let file_path = config.policies_dir.join(format!("{}.yaml", name));
@@ -1403,6 +1456,7 @@ fn handle_token_menu(config: &AgentGateConfig) -> Result<()> {
                 user_mode: false,
                 os_user: None,
                 tier: None,
+                actions: None,
             };
             handle_token(Some(token_sub), config)?;
         }
@@ -1530,7 +1584,7 @@ async fn handle_server_setup_wizard(config: &AgentGateConfig) -> Result<()> {
             .as_deref()
             .and_then(|e| parse_duration(e).ok().flatten());
         let token_name = format!("agent-{}", &uuid::Uuid::new_v4().to_string()[..6]);
-        let raw_token = store.create(&token_name, policy, duration, None, None)?;
+        let raw_token = store.create(&token_name, policy, duration, None, None, None)?;
         store.save()?;
 
         println!("\n🔑 Access Token Created:");

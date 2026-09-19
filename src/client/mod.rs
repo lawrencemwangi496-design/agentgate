@@ -300,7 +300,7 @@ pub async fn handle_interactive_login(
             let config = crate::config::AgentGateConfig::load()?;
             let mut token_store = crate::auth::TokenStore::load(&config.tokens_file)?;
             let token_name = format!("cli-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-            let new_token = token_store.create(&token_name, policy_name, None, None, None)?;
+            let new_token = token_store.create(&token_name, policy_name, None, None, None, None)?;
             token_store.save()?;
             println!(
                 "✓ Generated token '{}' (Policy: {}, Never expires)",
@@ -1052,4 +1052,114 @@ pub async fn handle_shell(
     }
 
     Ok(())
+}
+
+/// Handle `agentgate action <name> [-p key=value...]`
+pub async fn handle_action(args: crate::cli::ActionArgs) -> Result<()> {
+    let saved_cfg = load_client_config()?.unwrap_or_else(|| ClientConfig {
+        server: "https://127.0.0.1:7991".to_string(),
+        token: String::new(),
+        insecure_tls: true,
+    });
+
+    let server_url = args
+        .server
+        .or_else(|| std::env::var("AGENTGATE_SERVER").ok())
+        .unwrap_or(saved_cfg.server)
+        .trim_end_matches('/')
+        .to_string();
+
+    let token = args
+        .token
+        .or_else(|| std::env::var("AGENTGATE_TOKEN").ok())
+        .unwrap_or(saved_cfg.token);
+
+    if token.trim().is_empty() {
+        eprintln!("❌ Authentication required: No token found.");
+        eprintln!("💡 Log in first using: agentgate login --token <TOKEN>");
+        std::process::exit(1);
+    }
+
+    let mut params_map = std::collections::HashMap::new();
+    for p in &args.params {
+        if let Some((k, v)) = p.split_once('=') {
+            params_map.insert(k.trim().to_string(), v.trim().to_string());
+        } else {
+            eprintln!("⚠️  Warning: Parameter '{}' is not in key=value format; skipping", p);
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(saved_cfg.insecure_tls)
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .context("Failed to build HTTP client")?;
+
+    let action_url = format!("{}/v1/action/{}", server_url, args.name);
+
+    let resp = match client
+        .post(&action_url)
+        .header("Authorization", format!("Bearer {}", token.trim()))
+        .header("Content-Type", "application/json")
+        .json(&crate::server::ActionRequest { params: params_map })
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("❌ Failed to connect to AgentGate server at {}: {}", server_url, e);
+            std::process::exit(1);
+        }
+    };
+
+    let status = resp.status();
+    let text = resp.text().await.context("Failed to read server response body")?;
+
+    if args.json {
+        println!("{}", text);
+        if status.is_success() {
+            return Ok(());
+        } else {
+            std::process::exit(1);
+        }
+    }
+
+    if status.is_success() {
+        if let Ok(action_resp) = serde_json::from_str::<crate::server::ActionResponse>(&text) {
+            println!("🚀 Executing action '{}' ({} steps):", action_resp.action, action_resp.steps.len());
+            for (idx, step) in action_resp.steps.iter().enumerate() {
+                println!("\n▶ Step {}/{}: {}", idx + 1, action_resp.steps.len(), step.step);
+                if !step.stdout.is_empty() {
+                    print!("{}", step.stdout);
+                }
+                if !step.stderr.is_empty() {
+                    eprint!("{}", step.stderr);
+                }
+                if step.exit_code == 0 {
+                    println!("  ✓ Step {} completed ({}ms, Exit 0)", idx + 1, step.duration_ms);
+                } else {
+                    println!("  ❌ Step {} failed with Exit code {} ({}ms)", idx + 1, step.exit_code, step.duration_ms);
+                }
+            }
+
+            if action_resp.success {
+                println!("\n✅ Action '{}' completed successfully in {}ms", action_resp.action, action_resp.total_duration_ms);
+                return Ok(());
+            } else {
+                eprintln!("\n❌ Action '{}' failed", action_resp.action);
+                std::process::exit(1);
+            }
+        } else {
+            println!("{}", text);
+            return Ok(());
+        }
+    }
+
+    // Error status handling
+    if let Ok(err_obj) = serde_json::from_str::<crate::server::ErrorResponse>(&text) {
+        eprintln!("❌ AgentGate error: {}", err_obj.message);
+    } else {
+        eprintln!("❌ HTTP error {}: {}", status, text);
+    }
+    std::process::exit(1);
 }

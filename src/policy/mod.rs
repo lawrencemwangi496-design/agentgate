@@ -13,6 +13,41 @@ fn default_true() -> bool {
     true
 }
 
+/// An action template with multiple steps
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PolicyAction {
+    pub steps: Vec<String>,
+    #[serde(default = "default_true")]
+    pub stop_on_failure: bool,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+impl PolicyAction {
+    /// Renders steps by substituting template parameters while strictly rejecting shell metacharacters
+    pub fn render_steps(
+        &self,
+        params: &std::collections::HashMap<String, String>,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut rendered = Vec::with_capacity(self.steps.len());
+        for step in &self.steps {
+            let mut s = step.clone();
+            for (k, v) in params {
+                // Reject shell metacharacters in parameter values
+                for c in &[';', '&', '|', '`', '$', '(', ')', '>', '<', '\n', '\r'] {
+                    if v.contains(*c) {
+                        anyhow::bail!("Parameter '{}' contains disallowed metacharacter '{}'", k, c);
+                    }
+                }
+                s = s.replace(&format!("{{{}}}", k), v);
+                s = s.replace(&format!("{{{{{}}}}}", k), v);
+            }
+            rendered.push(s);
+        }
+        Ok(rendered)
+    }
+}
+
 /// A complete policy supporting both allowed scopes and safety guardrails (deny rules)
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Policy {
@@ -26,6 +61,8 @@ pub struct Policy {
     pub deny: Vec<PolicyRule>,
     #[serde(default)]
     pub rules: Vec<PolicyRule>,
+    #[serde(default)]
+    pub actions: std::collections::HashMap<String, PolicyAction>,
 }
 
 impl Default for Policy {
@@ -37,6 +74,7 @@ impl Default for Policy {
             allow: Vec::new(),
             deny: Vec::new(),
             rules: Vec::new(),
+            actions: std::collections::HashMap::new(),
         }
     }
 }
@@ -116,6 +154,11 @@ impl PolicyStore {
 }
 
 impl Policy {
+    /// Retrieve a named action from this policy
+    pub fn get_action(&self, name: &str) -> Option<&PolicyAction> {
+        self.actions.get(name)
+    }
+
     /// Check if a given command and args are permitted by this policy:
     /// 1. Deny list ALWAYS takes precedence: If any rule in `deny` matches, returns `false`.
     /// 2. Allow list check: If any rule in `allow` (or legacy `rules`) matches, returns `true`.

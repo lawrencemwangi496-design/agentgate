@@ -73,6 +73,26 @@ pub struct StoredToken {
     pub os_user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Vec<String>>,
+}
+
+impl StoredToken {
+    /// Checks if this token is permitted to execute arbitrary commands via /v1/exec
+    pub fn can_exec(&self) -> bool {
+        match &self.actions {
+            None => true,
+            Some(list) => list.iter().any(|a| a == "*" || a == "exec"),
+        }
+    }
+
+    /// Checks if this token is permitted to execute a specific named action
+    pub fn can_run_action(&self, action: &str) -> bool {
+        match &self.actions {
+            None => true,
+            Some(list) => list.iter().any(|a| a == "*" || a == action),
+        }
+    }
 }
 
 /// The token store
@@ -184,6 +204,7 @@ impl TokenStore {
         expires_in: Option<chrono::Duration>,
         os_user: Option<String>,
         tier: Option<String>,
+        actions: Option<Vec<String>>,
     ) -> Result<String> {
         self.with_lock(|store| {
             // Check if token with the same name already exists
@@ -213,6 +234,7 @@ impl TokenStore {
                 last_used_at: None,
                 os_user: os_user.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()),
                 tier: tier.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+                actions,
             };
 
             store.tokens.push(stored_token);
