@@ -270,3 +270,36 @@ fn test_port_binding_and_conflict_detection() {
         assert_eq!(e.kind(), std::io::ErrorKind::AddrInUse);
     }
 }
+
+#[test]
+fn test_resolve_client_ip_spoof_prevention() {
+    use agentgate::server::resolve_client_ip;
+    use axum::http::HeaderMap;
+    use std::net::SocketAddr;
+
+    let trusted_proxies = vec!["127.0.0.1".to_string()];
+
+    // Case 1: Untrusted remote caller attempts to spoof IP via X-Forwarded-For
+    let untrusted_peer: SocketAddr = "198.51.100.42:54321".parse().unwrap();
+    let mut spoof_headers = HeaderMap::new();
+    spoof_headers.insert("x-forwarded-for", "127.0.0.1".parse().unwrap());
+    spoof_headers.insert("x-real-ip", "10.0.0.1".parse().unwrap());
+
+    let resolved = resolve_client_ip(untrusted_peer, &spoof_headers, &trusted_proxies);
+    // Spoofed headers MUST be ignored; real peer IP is used!
+    assert_eq!(resolved, "198.51.100.42");
+
+    // Case 2: Trusted local reverse proxy forwards real client IP
+    let trusted_peer: SocketAddr = "127.0.0.1:54321".parse().unwrap();
+    let mut proxy_headers = HeaderMap::new();
+    proxy_headers.insert("x-forwarded-for", "203.0.113.19".parse().unwrap());
+
+    let resolved_proxy = resolve_client_ip(trusted_peer, &proxy_headers, &trusted_proxies);
+    // Forwarded IP is trusted and both are recorded
+    assert_eq!(resolved_proxy, "203.0.113.19 (via 127.0.0.1)");
+
+    // Case 3: Trusted peer without forwarded headers
+    let direct_headers = HeaderMap::new();
+    let resolved_direct = resolve_client_ip(trusted_peer, &direct_headers, &trusted_proxies);
+    assert_eq!(resolved_direct, "127.0.0.1");
+}

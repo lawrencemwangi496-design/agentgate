@@ -8,7 +8,7 @@ use crate::policy::PolicyStore;
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -27,6 +27,7 @@ pub struct AppState {
     pub tokens_file: std::path::PathBuf,
     pub policies_dir: std::path::PathBuf,
     pub audit_logger: Arc<AuditLogger>,
+    pub trusted_proxies: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +68,7 @@ pub async fn run_server(
         tokens_file: config.tokens_file.clone(),
         policies_dir: config.policies_dir.clone(),
         audit_logger,
+        trusted_proxies: vec!["127.0.0.1".to_string(), "::1".to_string()],
     };
 
     let cors = CorsLayer::new()
@@ -189,17 +191,51 @@ async fn health_handler() -> Json<HealthResponse> {
     })
 }
 
-async fn exec_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<ExecRequest>,
-) -> Response {
-    let remote_addr = headers
+/// Resolve the client IP address securely:
+/// - Uses the real peer socket IP as the ground truth.
+/// - Only trusts X-Forwarded-For / X-Real-IP if the peer socket address is a trusted proxy.
+/// - If forwarded differs from peer, logs both: "<forwarded> (via <peer>)".
+pub fn resolve_client_ip(
+    peer_addr: SocketAddr,
+    headers: &HeaderMap,
+    trusted_proxies: &[String],
+) -> String {
+    let peer_ip = peer_addr.ip().to_string();
+    let is_trusted = peer_addr.ip().is_loopback()
+        || trusted_proxies.iter().any(|tp| tp == &peer_ip);
+
+    if !is_trusted {
+        // Untrusted peer: completely ignore forwarded headers to prevent spoofing
+        return peer_ip;
+    }
+
+    // Peer is trusted proxy: check for forwarded header
+    let forwarded_opt = headers
         .get("x-forwarded-for")
         .or_else(|| headers.get("x-real-ip"))
         .and_then(|h| h.to_str().ok())
-        .unwrap_or("127.0.0.1")
-        .to_string();
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Some(fwd) = forwarded_opt {
+        if fwd != peer_ip {
+            format!("{} (via {})", fwd, peer_ip)
+        } else {
+            peer_ip
+        }
+    } else {
+        peer_ip
+    }
+}
+
+async fn exec_handler(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(payload): Json<ExecRequest>,
+) -> Response {
+    let remote_addr = resolve_client_ip(peer_addr, &headers, &state.trusted_proxies);
 
     let command_raw = payload.command.trim();
 
