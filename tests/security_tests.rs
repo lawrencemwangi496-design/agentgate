@@ -403,6 +403,7 @@ async fn test_cors_hardened_by_default_and_configurable() {
         policies_dir: config.policies_dir.clone(),
         audit_logger: Arc::new(AuditLogger::new(config.logs_dir.clone())),
         trusted_proxies: vec!["127.0.0.1".to_string()],
+        auth_throttler: agentgate::server::AuthThrottler::default(),
     };
 
     // 1. Default configuration: no CORS header returned for cross-origin request
@@ -454,5 +455,87 @@ async fn test_cors_hardened_by_default_and_configurable() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[tokio::test]
+async fn test_auth_failure_throttling_and_lockout() {
+    use agentgate::audit::AuditLogger;
+    use agentgate::config::AgentGateConfig;
+    use agentgate::server::{create_router, AppState, AuthThrottler};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tower::Service;
+
+    let temp_dir =
+        std::env::temp_dir().join(format!("agentgate_throttle_test_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let config = AgentGateConfig {
+        config_dir: temp_dir.clone(),
+        config_file: temp_dir.join("config.yaml"),
+        client_file: temp_dir.join("client.yaml"),
+        policies_dir: temp_dir.join("policies"),
+        tokens_file: temp_dir.join("tokens.yaml"),
+        certs_dir: temp_dir.join("certs"),
+        logs_dir: temp_dir.join("logs"),
+        pid_file: temp_dir.join("pid"),
+        listen_addr: "127.0.0.1".to_string(),
+        listen_port: 7991,
+        allowed_origins: vec![],
+    };
+
+    // 3 failures within 5 seconds triggers 5 second lockout
+    let throttler = AuthThrottler::new(3, Duration::from_secs(5), Duration::from_secs(5));
+
+    let state = AppState {
+        tokens_file: config.tokens_file.clone(),
+        policies_dir: config.policies_dir.clone(),
+        audit_logger: Arc::new(AuditLogger::new(config.logs_dir.clone())),
+        trusted_proxies: vec!["127.0.0.1".to_string()],
+        auth_throttler: throttler,
+    };
+
+    let mut router = create_router(&config, state);
+
+    let attacker_addr: SocketAddr = "198.51.100.99:12345".parse().unwrap();
+
+    let make_req = |addr: SocketAddr, bad_token: &str| {
+        let mut req = Request::builder()
+            .uri("/v1/exec")
+            .method("POST")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", bad_token))
+            .body(Body::from(r#"{"command": "uptime"}"#))
+            .unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(addr));
+        req
+    };
+
+    // Failure 1
+    let resp1 = router.call(make_req(attacker_addr, "invalid_1")).await.unwrap();
+    assert_eq!(resp1.status(), StatusCode::UNAUTHORIZED);
+
+    // Failure 2
+    let resp2 = router.call(make_req(attacker_addr, "invalid_2")).await.unwrap();
+    assert_eq!(resp2.status(), StatusCode::UNAUTHORIZED);
+
+    // Failure 3 (reaches threshold)
+    let resp3 = router.call(make_req(attacker_addr, "invalid_3")).await.unwrap();
+    assert_eq!(resp3.status(), StatusCode::UNAUTHORIZED);
+
+    // 4th request from attacker IP must be locked out immediately with 429 Too Many Requests
+    let resp4 = router.call(make_req(attacker_addr, "invalid_4")).await.unwrap();
+    assert_eq!(resp4.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // A different benign peer IP is NOT locked out
+    let benign_addr: SocketAddr = "203.0.113.88:12345".parse().unwrap();
+    let resp_benign = router.call(make_req(benign_addr, "invalid_benign")).await.unwrap();
+    assert_eq!(resp_benign.status(), StatusCode::UNAUTHORIZED);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
 
 

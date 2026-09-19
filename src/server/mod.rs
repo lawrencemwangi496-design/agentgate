@@ -1,4 +1,7 @@
 pub mod cert;
+pub mod throttler;
+
+pub use throttler::AuthThrottler;
 
 use crate::audit::{AuditEntry, AuditLogger, AuditResult};
 use crate::auth::TokenStore;
@@ -28,6 +31,7 @@ pub struct AppState {
     pub policies_dir: std::path::PathBuf,
     pub audit_logger: Arc<AuditLogger>,
     pub trusted_proxies: Vec<String>,
+    pub auth_throttler: AuthThrottler,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -106,6 +110,7 @@ pub async fn run_server(
         policies_dir: config.policies_dir.clone(),
         audit_logger,
         trusted_proxies: vec!["127.0.0.1".to_string(), "::1".to_string()],
+        auth_throttler: AuthThrottler::default(),
     };
 
     let app = create_router(config, state);
@@ -257,7 +262,24 @@ async fn exec_handler(
     headers: HeaderMap,
     Json(payload): Json<ExecRequest>,
 ) -> Response {
+    let peer_ip = peer_addr.ip();
     let remote_addr = resolve_client_ip(peer_addr, &headers, &state.trusted_proxies);
+
+    // 0. Check per-IP lockout to prevent audit log bloat and brute-force token exhaustion
+    if let Some(remaining) = state.auth_throttler.check_lockout(&peer_ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ErrorResponse {
+                error: "too_many_requests".to_string(),
+                message: format!(
+                    "Too many authentication failures. Locked out for {} seconds",
+                    remaining.as_secs().max(1)
+                ),
+                exit_code: -1,
+            }),
+        )
+            .into_response();
+    }
 
     let command_raw = payload.command.trim();
 
@@ -266,6 +288,7 @@ async fn exec_handler(
         Some(h) => match h.to_str() {
             Ok(s) => s,
             Err(_) => {
+                state.auth_throttler.record_failure(peer_ip);
                 return (
                     StatusCode::UNAUTHORIZED,
                     Json(ErrorResponse {
@@ -278,6 +301,7 @@ async fn exec_handler(
             }
         },
         None => {
+            state.auth_throttler.record_failure(peer_ip);
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(ErrorResponse {
@@ -293,6 +317,7 @@ async fn exec_handler(
     let token_str = if let Some(token) = auth_header.strip_prefix("Bearer ") {
         token.trim()
     } else {
+        state.auth_throttler.record_failure(peer_ip);
         return (
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse {
@@ -323,8 +348,12 @@ async fn exec_handler(
         };
 
         match store.validate(token_str) {
-            Ok(Some(t)) => t,
+            Ok(Some(t)) => {
+                state.auth_throttler.record_success(&peer_ip);
+                t
+            }
             Ok(None) => {
+                state.auth_throttler.record_failure(peer_ip);
                 let _ = state.audit_logger.log(&AuditEntry {
                     timestamp: Utc::now(),
                     token_name: "unauthenticated".to_string(),
