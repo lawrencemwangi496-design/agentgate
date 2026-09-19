@@ -1,6 +1,8 @@
 pub mod cert;
+pub mod rate_limit;
 pub mod throttler;
 
+pub use rate_limit::RequestRateLimiter;
 pub use throttler::AuthThrottler;
 
 use crate::audit::{AuditEntry, AuditLogger, AuditResult};
@@ -32,6 +34,7 @@ pub struct AppState {
     pub audit_logger: Arc<AuditLogger>,
     pub trusted_proxies: Vec<String>,
     pub auth_throttler: AuthThrottler,
+    pub rate_limiter: RequestRateLimiter,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -116,7 +119,41 @@ pub fn create_router(config: &AgentGateConfig, state: AppState) -> Router {
         }
     }
 
-    app.layer(axum::extract::DefaultBodyLimit::max(64 * 1024)) // 64KB max request body — blocks large payload exhaustion
+    let rate_limiter = state.rate_limiter.clone();
+    let rate_limit_layer = axum::middleware::from_fn(
+        move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let limiter = rate_limiter.clone();
+            async move {
+                let peer_ip = req
+                    .extensions()
+                    .get::<ConnectInfo<SocketAddr>>()
+                    .map(|ci| ci.0.ip())
+                    .unwrap_or_else(|| std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+
+                if let Err(retry_after) = limiter.check_rate_limit(&peer_ip) {
+                    let err_json = serde_json::json!({
+                        "error": "rate_limited",
+                        "message": format!(
+                            "Rate limit exceeded. Please wait {} second(s) before retrying.",
+                            retry_after
+                        ),
+                        "exit_code": 1,
+                    });
+                    return Response::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header(header::RETRY_AFTER, retry_after.to_string())
+                        .body(axum::body::Body::from(err_json.to_string()))
+                        .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response());
+                }
+
+                next.run(req).await
+            }
+        },
+    );
+
+    app.layer(rate_limit_layer)
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024)) // 64KB max request body — blocks large payload exhaustion
         .layer(tower::limit::ConcurrencyLimitLayer::new(128)) // 128 concurrent connection limit — blocks bot DDoS hammering
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -135,6 +172,7 @@ pub async fn run_server(
         audit_logger,
         trusted_proxies: vec!["127.0.0.1".to_string(), "::1".to_string()],
         auth_throttler: AuthThrottler::default(),
+        rate_limiter: RequestRateLimiter::default(),
     };
 
     let app = create_router(config, state);
