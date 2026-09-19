@@ -24,26 +24,126 @@ pub struct PolicyAction {
 }
 
 impl PolicyAction {
-    /// Renders steps by substituting template parameters while strictly rejecting shell metacharacters
+    /// Extracts all unique placeholder names declared in this action's steps
+    pub fn declared_placeholders(&self) -> std::collections::HashSet<String> {
+        let mut placeholders = std::collections::HashSet::new();
+        for step in &self.steps {
+            let mut chars = step.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '{' {
+                    let mut name = String::new();
+                    while let Some(&inner) = chars.peek() {
+                        if inner == '}' {
+                            chars.next();
+                            if !name.is_empty() {
+                                placeholders.insert(name);
+                            }
+                            break;
+                        } else if inner == '{' {
+                            break;
+                        } else {
+                            name.push(inner);
+                            chars.next();
+                        }
+                    }
+                }
+            }
+        }
+        placeholders
+    }
+
+    /// Renders steps by substituting template parameters in a single pass with strict validation:
+    /// - Rejects missing required parameters
+    /// - Rejects unexpected / undeclared parameters
+    /// - Rejects whitespace, quotes, leading dashes (flag injection), and shell metacharacters
+    /// - Rejects values exceeding 128 characters
+    /// - Single-pass substitution prevents recursive re-substitution ({other})
     pub fn render_steps(
         &self,
         params: &std::collections::HashMap<String, String>,
     ) -> anyhow::Result<Vec<String>> {
+        let declared = self.declared_placeholders();
+
+        // 1. Check for missing required parameters
+        for required in &declared {
+            if !params.contains_key(required) {
+                anyhow::bail!("Missing required action parameter: '{}'", required);
+            }
+        }
+
+        // 2. Check for unexpected / undeclared parameters
+        for supplied in params.keys() {
+            if !declared.contains(supplied) {
+                anyhow::bail!("Unexpected parameter '{}' not declared in action steps", supplied);
+            }
+        }
+
+        // 3. Strict value validation on each supplied parameter
+        for (k, v) in params {
+            if v.len() > 128 {
+                anyhow::bail!("Parameter '{}' exceeds maximum allowed length of 128 characters", k);
+            }
+            if v.is_empty() {
+                anyhow::bail!("Parameter '{}' cannot be empty", k);
+            }
+            // Reject leading dash (prevents flag injection like --all-tags, --privileged, -v)
+            if v.starts_with('-') {
+                anyhow::bail!("Parameter '{}' cannot start with a dash '-' to prevent flag injection", k);
+            }
+            // Reject whitespace (prevents argument splitting: a value must remain a single token)
+            if v.chars().any(|c| c.is_whitespace()) {
+                anyhow::bail!("Parameter '{}' cannot contain whitespace", k);
+            }
+            // Reject quotes (prevents quote breaking)
+            if v.contains('\'') || v.contains('"') {
+                anyhow::bail!("Parameter '{}' cannot contain quotation marks", k);
+            }
+            // Reject shell metacharacters, commas, backslashes
+            for c in &[';', '&', '|', '`', '$', '(', ')', '>', '<', '\n', '\r', ',', '\\'] {
+                if v.contains(*c) {
+                    anyhow::bail!("Parameter '{}' contains disallowed character '{}'", k, c);
+                }
+            }
+        }
+
+        // 4. Single-pass template substitution to prevent re-substitution
         let mut rendered = Vec::with_capacity(self.steps.len());
         for step in &self.steps {
-            let mut s = step.clone();
-            for (k, v) in params {
-                // Reject shell metacharacters in parameter values
-                for c in &[';', '&', '|', '`', '$', '(', ')', '>', '<', '\n', '\r'] {
-                    if v.contains(*c) {
-                        anyhow::bail!("Parameter '{}' contains disallowed metacharacter '{}'", k, c);
+            let mut result = String::with_capacity(step.len());
+            let mut chars = step.chars().peekable();
+
+            while let Some(c) = chars.next() {
+                if c == '{' {
+                    let mut key = String::new();
+                    let mut closed = false;
+                    while let Some(&inner) = chars.peek() {
+                        if inner == '}' {
+                            chars.next();
+                            closed = true;
+                            break;
+                        } else if inner == '{' {
+                            break;
+                        } else {
+                            key.push(inner);
+                            chars.next();
+                        }
                     }
+                    if closed && let Some(val) = params.get(&key) {
+                        result.push_str(val);
+                    } else {
+                        result.push('{');
+                        result.push_str(&key);
+                        if closed {
+                            result.push('}');
+                        }
+                    }
+                } else {
+                    result.push(c);
                 }
-                s = s.replace(&format!("{{{}}}", k), v);
-                s = s.replace(&format!("{{{{{}}}}}", k), v);
             }
-            rendered.push(s);
+            rendered.push(result);
         }
+
         Ok(rendered)
     }
 }

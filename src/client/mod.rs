@@ -473,6 +473,7 @@ pub async fn handle_exec(
     command_args: Vec<String>,
     server_override: Option<String>,
     token_override: Option<String>,
+    cwd: Option<String>,
     json_mode: bool,
     quiet: bool,
 ) -> Result<()> {
@@ -520,11 +521,16 @@ pub async fn handle_exec(
 
     let exec_url = format!("{}/v1/exec", server_url);
 
+    let mut body = serde_json::json!({ "command": command_str });
+    if let Some(dir) = cwd {
+        body["cwd"] = serde_json::Value::String(dir);
+    }
+
     let resp = match client
         .post(&exec_url)
         .header("Authorization", format!("Bearer {}", token.trim()))
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "command": command_str }))
+        .json(&body)
         .send()
         .await
     {

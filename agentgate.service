@@ -1,7 +1,7 @@
 [Unit]
 Description=AgentGate - Secure AI Agent Privilege & Command Execution Bridge
 After=network.target
-Documentation=https://github.com/agentgate/agentgate
+Documentation=https://github.com/lawrencemwangi496-design/agentgate
 
 [Service]
 Type=simple

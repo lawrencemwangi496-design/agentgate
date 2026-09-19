@@ -40,6 +40,8 @@ pub struct AppState {
 #[derive(Serialize, Deserialize)]
 pub struct ExecRequest {
     pub command: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -295,8 +297,7 @@ pub fn resolve_client_ip(
     trusted_proxies: &[String],
 ) -> String {
     let peer_ip = peer_addr.ip().to_string();
-    let is_trusted = peer_addr.ip().is_loopback()
-        || trusted_proxies.iter().any(|tp| tp == &peer_ip);
+    let is_trusted = trusted_proxies.iter().any(|tp| tp == &peer_ip);
 
     if !is_trusted {
         // Untrusted peer: completely ignore forwarded headers to prevent spoofing
@@ -520,6 +521,51 @@ async fn exec_handler(
         }
     };
 
+    // Check if command is shell builtin `cd`
+    if parsed_cmd.binary == "cd" {
+        let target_dir = parsed_cmd.args.first().map(|s| s.as_str()).unwrap_or("~");
+        let expanded = if target_dir == "~" {
+            dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        } else {
+            std::path::PathBuf::from(target_dir)
+        };
+
+        if expanded.is_dir() {
+            let _ = state.audit_logger.log(&AuditEntry {
+                timestamp: Utc::now(),
+                token_name: stored_token.name.clone(),
+                command: command_raw.to_string(),
+                policy: stored_token.policy.clone(),
+                result: AuditResult::Allowed,
+                reason: None,
+                exit_code: Some(0),
+                duration_ms: Some(0),
+                remote_addr: remote_addr.clone(),
+            });
+            return (
+                StatusCode::OK,
+                Json(ExecSuccessResponse {
+                    exit_code: 0,
+                    stdout: format!("Directory exists: {}. In AgentGate, use the 'cwd' parameter (or 'agentgate exec --cwd <path> <cmd>') to run commands within a directory.\n", expanded.display()),
+                    stderr: String::new(),
+                    duration_ms: 0,
+                    truncated: false,
+                }),
+            )
+                .into_response();
+        } else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "directory_not_found".to_string(),
+                    message: format!("cd: no such file or directory: {}", target_dir),
+                    exit_code: 1,
+                }),
+            )
+                .into_response();
+        }
+    }
+
     // 3. Check command against the token's Policy
     let is_allowed = {
         let policy_store = match PolicyStore::load(&state.policies_dir) {
@@ -593,8 +639,27 @@ async fn exec_handler(
             .into_response();
     }
 
-    // 4. Execute command safely via executor (no shell, with timeout and per-token OS user)
-    let exec_res = match executor::execute(&parsed_cmd, 30, stored_token.os_user.as_deref()).await {
+    // 4. Validate optional cwd
+    let cwd_path = if let Some(ref dir) = payload.cwd {
+        let p = std::path::Path::new(dir);
+        if !p.is_dir() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_cwd".to_string(),
+                    message: format!("Working directory does not exist: {}", dir),
+                    exit_code: 1,
+                }),
+            )
+                .into_response();
+        }
+        Some(dir.as_str())
+    } else {
+        None
+    };
+
+    // 5. Execute command safely via executor (no shell, with timeout, per-token OS user, and cwd)
+    let exec_res = match executor::execute(&parsed_cmd, 30, stored_token.os_user.as_deref(), cwd_path).await {
         Ok(res) => res,
         Err(e) => {
             let reason = format!("Execution error: {}", e);
@@ -932,7 +997,7 @@ async fn action_handler(
                 .into_response();
         }
 
-        let exec_res = match executor::execute(&parsed_cmd, 60, stored_token.os_user.as_deref()).await {
+        let exec_res = match executor::execute(&parsed_cmd, 60, stored_token.os_user.as_deref(), None).await {
             Ok(r) => r,
             Err(e) => {
                 let reason = e.to_string();

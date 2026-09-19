@@ -195,6 +195,10 @@ pub struct ExecArgs {
     #[arg(long)]
     pub token: Option<String>,
 
+    /// Working directory in which to execute the command
+    #[arg(long)]
+    pub cwd: Option<String>,
+
     /// Output full JSON response from server
     #[arg(long, default_value_t = false)]
     pub json: bool,

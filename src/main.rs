@@ -70,6 +70,7 @@ async fn main() -> Result<()> {
                 args.command,
                 args.server,
                 args.token,
+                args.cwd,
                 args.json,
                 args.quiet,
             )

@@ -337,6 +337,13 @@ fn test_resolve_client_ip_spoof_prevention() {
     let direct_headers = HeaderMap::new();
     let resolved_direct = resolve_client_ip(trusted_peer, &direct_headers, &trusted_proxies);
     assert_eq!(resolved_direct, "127.0.0.1");
+
+    // Case 4: Untrusted loopback connection (when loopback is NOT in trusted_proxies)
+    let loopback_peer: SocketAddr = "127.0.0.1:54321".parse().unwrap();
+    let empty_proxies: Vec<String> = Vec::new();
+    let resolved_untrusted_loopback = resolve_client_ip(loopback_peer, &spoof_headers, &empty_proxies);
+    // Because loopback is not explicitly in trusted_proxies, X-Forwarded-For is ignored!
+    assert_eq!(resolved_untrusted_loopback, "127.0.0.1");
 }
 
 #[test]
@@ -710,9 +717,19 @@ async fn test_executor_with_nonexistent_os_user_fails_gracefully() {
     use agentgate::executor::{self, ParsedCommand};
 
     let cmd = ParsedCommand::parse("uptime").unwrap();
-    let res = executor::execute(&cmd, 5, Some("definitely_nonexistent_user_agentgate_99999")).await;
+    let res = executor::execute(&cmd, 5, Some("definitely_nonexistent_user_agentgate_99999"), None).await;
     assert!(res.is_err());
     assert!(res.unwrap_err().to_string().contains("does not exist"));
+}
+
+#[tokio::test]
+async fn test_executor_with_cwd() {
+    use agentgate::executor::{self, ParsedCommand};
+
+    let cmd = ParsedCommand::parse("pwd").unwrap();
+    let res = executor::execute(&cmd, 5, None, Some("/tmp")).await.unwrap();
+    assert_eq!(res.exit_code, 0);
+    assert!(res.stdout.trim().contains("tmp"));
 }
 
 #[test]
@@ -756,6 +773,8 @@ fn test_sudoers_gtfobins_and_wildcard_rejection() {
     // Metacharacters rejected
     assert!(validate_command_for_sudo("/usr/bin/systemctl restart nginx; whoami").is_err());
     assert!(validate_command_for_sudo("/usr/bin/systemctl restart nginx &").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/systemctl restart, nginx").is_err());
+    assert!(validate_command_for_sudo("/usr/bin/systemctl restart\\ nginx").is_err());
 
     // Valid exact commands with absolute path and exact arguments ACCEPTED
     assert!(validate_command_for_sudo("/usr/bin/systemctl restart nginx").is_ok());
@@ -775,7 +794,7 @@ fn test_generate_sudoers_content_and_policy_integration() {
         "/usr/bin/systemctl reload nginx".to_string(),
     ];
     let content = generate_sudoers_content("ag-ops-user", &cmds).unwrap();
-    assert!(content.contains("ag-ops-user ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx"));
+    assert!(content.contains("ag-ops-user ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx"));
 
     // Policy with exact commands produces valid sudoers
     let exact_policy = Policy {
@@ -797,7 +816,7 @@ fn test_generate_sudoers_content_and_policy_integration() {
         actions: std::collections::HashMap::new(),
     };
     let sudoers_gen = generate_sudoers_from_policy(&exact_policy, "ag-agent").unwrap();
-    assert!(sudoers_gen.contains("ag-agent ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx"));
+    assert!(sudoers_gen.contains("ag-agent ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx"));
 
     // Policy with wildcards fails sudoers generation
     let wildcard_policy = Policy {
@@ -876,18 +895,72 @@ fn test_action_parameter_substitution_and_injection_blocking() {
 
     // Injection attempt with shell metacharacters in parameter value
     let mut injection_params = HashMap::new();
-    injection_params.insert("site".to_string(), "mysite; rm -rf /".to_string());
+    injection_params.insert("site".to_string(), "mysite;rm".to_string());
     injection_params.insert("branch".to_string(), "main".to_string());
 
     let res = action.render_steps(&injection_params);
     assert!(res.is_err());
-    assert!(res.unwrap_err().to_string().contains("disallowed metacharacter"));
+    assert!(res.unwrap_err().to_string().contains("disallowed character"));
 
     let mut pipe_params = HashMap::new();
-    pipe_params.insert("branch".to_string(), "main | cat /etc/shadow".to_string());
+    pipe_params.insert("site".to_string(), "mysite".to_string());
+    pipe_params.insert("branch".to_string(), "main|cat".to_string());
     let res_pipe = action.render_steps(&pipe_params);
     assert!(res_pipe.is_err());
-    assert!(res_pipe.unwrap_err().to_string().contains("disallowed metacharacter"));
+    assert!(res_pipe.unwrap_err().to_string().contains("disallowed character"));
+
+    // Missing required parameter fails
+    let mut missing_params = HashMap::new();
+    missing_params.insert("site".to_string(), "mysite".to_string());
+    let res_missing = action.render_steps(&missing_params);
+    assert!(res_missing.is_err());
+    assert!(res_missing.unwrap_err().to_string().to_lowercase().contains("missing required"));
+
+    // Unexpected extra parameter fails
+    let mut extra_params = HashMap::new();
+    extra_params.insert("site".to_string(), "mysite".to_string());
+    extra_params.insert("branch".to_string(), "main".to_string());
+    extra_params.insert("extra".to_string(), "injected".to_string());
+    let res_extra = action.render_steps(&extra_params);
+    assert!(res_extra.is_err());
+    assert!(res_extra.unwrap_err().to_string().to_lowercase().contains("unexpected parameter"));
+
+    // Whitespace injection rejected
+    let mut space_params = HashMap::new();
+    space_params.insert("site".to_string(), "my site".to_string());
+    space_params.insert("branch".to_string(), "main".to_string());
+    let res_space = action.render_steps(&space_params);
+    assert!(res_space.is_err());
+    assert!(res_space.unwrap_err().to_string().contains("whitespace"));
+
+    // Quote injection rejected
+    let mut quote_params = HashMap::new();
+    quote_params.insert("site".to_string(), "mysite'test".to_string());
+    quote_params.insert("branch".to_string(), "main".to_string());
+    let res_quote = action.render_steps(&quote_params);
+    assert!(res_quote.is_err());
+    assert!(res_quote.unwrap_err().to_string().to_lowercase().contains("quotation marks"));
+
+    // Flag injection (leading dash) rejected
+    let mut flag_params = HashMap::new();
+    flag_params.insert("site".to_string(), "--force-delete".to_string());
+    flag_params.insert("branch".to_string(), "main".to_string());
+    let res_flag = action.render_steps(&flag_params);
+    assert!(res_flag.is_err());
+    assert!(res_flag.unwrap_err().to_string().contains("flag injection"));
+
+    // Single-pass substitution prevents recursive template injection
+    let resub_action = PolicyAction {
+        steps: vec!["/bin/echo {a} {b}".to_string()],
+        stop_on_failure: true,
+        description: None,
+    };
+    let mut resub_params = HashMap::new();
+    resub_params.insert("a".to_string(), "{b}".to_string());
+    resub_params.insert("b".to_string(), "world".to_string());
+    let resub_rendered = resub_action.render_steps(&resub_params).unwrap();
+    // {a} expands to literal "{b}", NOT second-pass expanded to "world"!
+    assert_eq!(resub_rendered[0], "/bin/echo {b} world");
 }
 
 #[test]

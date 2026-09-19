@@ -181,6 +181,7 @@ pub async fn execute(
     cmd: &ParsedCommand,
     timeout_secs: u64,
     os_user: Option<&str>,
+    cwd: Option<&str>,
 ) -> Result<ExecResult> {
     let start = Instant::now();
 
@@ -201,8 +202,18 @@ pub async fn execute(
             builder.as_std_mut().uid(uid).gid(gid);
             unsafe {
                 builder.as_std_mut().pre_exec(move || {
-                    if libc::setgroups(0, std::ptr::null()) != 0 {
-                        return Err(std::io::Error::last_os_error());
+                    // Strict privilege drop order: setgroups(0, NULL) -> setgid -> setuid
+                    // If root, clear all supplementary groups and switch IDs
+                    if libc::geteuid() == 0 {
+                        if libc::setgroups(0, std::ptr::null()) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        if libc::setgid(gid) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        if libc::setuid(uid) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
                     }
                     Ok(())
                 });
@@ -213,7 +224,14 @@ pub async fn execute(
         (default_user, default_home)
     };
 
-    // 2. Environment Sanitization
+    // 2. Working Directory Selection
+    if let Some(dir) = cwd {
+        builder.current_dir(dir);
+    } else {
+        builder.current_dir(&target_home);
+    }
+
+    // 3. Environment Sanitization
     builder.env_clear();
     builder.env("PATH", "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin");
     builder.env("LANG", "C.UTF-8");
@@ -221,12 +239,12 @@ pub async fn execute(
     builder.env("USER", &target_user);
     builder.env("HOME", &target_home);
 
-    // 3. Prevent interactive input hanging
+    // 4. Prevent interactive input hanging
     builder.stdin(Stdio::null());
     builder.stdout(Stdio::piped());
     builder.stderr(Stdio::piped());
 
-    // 3. Spawn child process
+    // 5. Spawn child process
     let mut child = builder
         .spawn()
         .with_context(|| format!("Failed to spawn process {:?}", cmd.binary_path))?;

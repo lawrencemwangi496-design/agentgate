@@ -29,8 +29,8 @@ pub fn validate_command_for_sudo(cmd_str: &str) -> Result<()> {
         );
     }
 
-    // 2. Reject shell metacharacters
-    for c in &[';', '&', '|', '`', '$', '(', ')', '>', '<', '\n', '\r'] {
+    // 2. Reject shell metacharacters, commas (sudoers separator), and backslashes
+    for c in &[';', '&', '|', '`', '$', '(', ')', '>', '<', '\n', '\r', ',', '\\'] {
         if trimmed.contains(*c) {
             bail!("Disallowed metacharacter '{}' in sudo command '{}'", c, trimmed);
         }
@@ -97,7 +97,7 @@ pub fn generate_sudoers_content(os_user: &str, commands: &[String]) -> Result<St
     let content = format!(
         "# AgentGate narrow sudoers policy for user {}\n\
          # Automatically generated - DO NOT EDIT MANUALLY\n\
-         {} ALL=(ALL) NOPASSWD: {}\n",
+         {} ALL=(root) NOPASSWD: {}\n",
         os_user, os_user, joined_cmds
     );
 
@@ -111,7 +111,7 @@ fn resolve_binary_path(binary: &str) -> Option<PathBuf> {
         if p.exists() {
             return Some(p);
         }
-        return Some(p); // Even if not on current machine, keep absolute path
+        return None;
     }
 
     let search_paths = [
@@ -129,8 +129,7 @@ fn resolve_binary_path(binary: &str) -> Option<PathBuf> {
         }
     }
 
-    // Default to /usr/bin/<binary> if not found locally
-    Some(Path::new("/usr/bin").join(binary))
+    None
 }
 
 /// Generates minimal sudoers entries from an AgentGate policy
@@ -179,13 +178,30 @@ pub fn generate_sudoers_from_policy(
     generate_sudoers_content(os_user, &exact_commands)
 }
 
+/// Helper to find visudo binary across standard system paths
+pub fn find_visudo() -> PathBuf {
+    for p in ["/usr/sbin/visudo", "/sbin/visudo", "/usr/bin/visudo"] {
+        let path = Path::new(p);
+        if path.exists() {
+            return path.to_path_buf();
+        }
+    }
+    PathBuf::from("visudo")
+}
+
 /// Safely installs a sudoers fragment to /etc/sudoers.d/ after visudo syntax verification
 pub fn install_sudoers_fragment(token_name: &str, content: &str) -> Result<PathBuf> {
     let target_dir = Path::new("/etc/sudoers.d");
+    if let Err(e) = fs::create_dir_all(target_dir) {
+        bail!("Failed to access /etc/sudoers.d (requires root privileges): {}", e);
+    }
+
     let target_path = target_dir.join(format!("agentgate-{}", token_name));
 
-    // Write to a temporary file first
-    let temp_path = std::env::temp_dir().join(format!("agentgate_sudoers_{}_{}", token_name, uuid::Uuid::new_v4()));
+    // Write to a temporary hidden dotfile directly inside /etc/sudoers.d/
+    // Sudoers parser automatically ignores dotfiles.
+    // Writing in the same directory enables atomic rename (same filesystem, eliminating TOCTOU).
+    let temp_path = target_dir.join(format!(".agentgate_tmp_{}_{}", token_name, uuid::Uuid::new_v4()));
     fs::write(&temp_path, content)
         .with_context(|| format!("Failed to write temporary sudoers file at {:?}", temp_path))?;
 
@@ -193,25 +209,20 @@ pub fn install_sudoers_fragment(token_name: &str, content: &str) -> Result<PathB
     let _ = fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o440));
 
     // Validate syntax with visudo -cf
-    let visudo_check = Command::new("visudo")
+    let visudo_bin = find_visudo();
+    let visudo_check = Command::new(&visudo_bin)
         .args(["-cf", temp_path.to_str().unwrap()])
         .output();
 
     match visudo_check {
         Ok(output) if output.status.success() => {
-            // Validation passed! Install to /etc/sudoers.d/
-            if let Err(e) = fs::create_dir_all(target_dir) {
+            // Validation passed! Atomically rename within /etc/sudoers.d/
+            if let Err(e) = fs::rename(&temp_path, &target_path) {
                 let _ = fs::remove_file(&temp_path);
-                bail!("Failed to access /etc/sudoers.d (requires root privileges): {}", e);
-            }
-
-            if let Err(e) = fs::copy(&temp_path, &target_path) {
-                let _ = fs::remove_file(&temp_path);
-                bail!("Failed to install sudoers file to {:?} (requires root privileges): {}", target_path, e);
+                bail!("Failed to atomically rename sudoers file to {:?} (requires root privileges): {}", target_path, e);
             }
 
             let _ = fs::set_permissions(&target_path, fs::Permissions::from_mode(0o440));
-            let _ = fs::remove_file(&temp_path);
             Ok(target_path)
         }
         Ok(output) => {
@@ -221,7 +232,7 @@ pub fn install_sudoers_fragment(token_name: &str, content: &str) -> Result<PathB
         }
         Err(e) => {
             let _ = fs::remove_file(&temp_path);
-            bail!("Failed to execute 'visudo' for syntax verification: {}", e);
+            bail!("Failed to execute 'visudo' ({:?}) for syntax verification: {}", visudo_bin, e);
         }
     }
 }
