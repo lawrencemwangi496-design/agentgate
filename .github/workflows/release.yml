@@ -1,0 +1,44 @@
+name: Release AgentGate
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Stable Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Release Binary
+        run: cargo build --release
+
+      - name: Package Binary & Compute Checksums
+        run: |
+          mkdir -p dist
+          cp target/release/agentgate dist/
+          cd dist
+          tar -czvf agentgate-linux-x86_64.tar.gz agentgate
+          sha256sum agentgate-linux-x86_64.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release & Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/agentgate-linux-x86_64.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true

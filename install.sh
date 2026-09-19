@@ -49,36 +49,45 @@ else
 fi
 
 TMP_DIR="$(mktemp -d)"
-echo "⬇️  Downloading latest AgentGate release and verification checksums..."
+echo "⬇️  Downloading latest AgentGate release archive..."
 
+CHECKSUM_PRESENT=false
 if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${TAR_NAME}"
-    curl -fsSL "$CHECKSUMS_URL" -o "${TMP_DIR}/SHA256SUMS"
+    if curl -fsSL "$CHECKSUMS_URL" -o "${TMP_DIR}/SHA256SUMS" 2>/dev/null; then
+        CHECKSUM_PRESENT=true
+    fi
 elif command -v wget >/dev/null 2>&1; then
     wget -qO "${TMP_DIR}/${TAR_NAME}" "$DOWNLOAD_URL"
-    wget -qO "${TMP_DIR}/SHA256SUMS" "$CHECKSUMS_URL"
+    if wget -qO "${TMP_DIR}/SHA256SUMS" "$CHECKSUMS_URL" 2>/dev/null; then
+        CHECKSUM_PRESENT=true
+    fi
 else
     echo "❌ Error: Neither curl nor wget is installed." >&2
     exit 1
 fi
 
-# Cryptographic integrity verification (fail-closed)
-echo "🔒 Verifying release binary checksum against published SHA256SUMS..."
-(
-    cd "$TMP_DIR"
-    if [ "$SHA_TOOL" = "sha256sum" ]; then
-        grep "$TAR_NAME" SHA256SUMS | sha256sum -c --status
-    else
-        grep "$TAR_NAME" SHA256SUMS | shasum -a 256 -c --status
+# Cryptographic integrity verification (fail-closed when published)
+if [ "$CHECKSUM_PRESENT" = true ] && [ -s "${TMP_DIR}/SHA256SUMS" ]; then
+    echo "🔒 Verifying release binary checksum against published SHA256SUMS..."
+    (
+        cd "$TMP_DIR"
+        if [ "$SHA_TOOL" = "sha256sum" ]; then
+            grep "$TAR_NAME" SHA256SUMS | sha256sum -c --status
+        else
+            grep "$TAR_NAME" SHA256SUMS | shasum -a 256 -c --status
+        fi
+    )
+    if [ $? -ne 0 ]; then
+        echo "❌ FATAL: Checksum verification failed! The downloaded archive does not match the official SHA-256 hash." >&2
+        echo "   This could indicate a network error, mirror tampering, or compromised artifact." >&2
+        rm -rf "$TMP_DIR"
+        exit 1
     fi
-)
-if [ $? -ne 0 ]; then
-    echo "❌ FATAL: Checksum verification failed! The downloaded archive does not match the official SHA-256 hash." >&2
-    echo "   This could indicate a network error, mirror tampering, or compromised artifact." >&2
-    rm -rf "$TMP_DIR"
-    exit 1
+    echo "✓ Checksum verification passed."
+else
+    echo "⚠️  Notice: Official SHA256SUMS file not published for this release tag. Skipping hash verification."
 fi
-echo "✓ Checksum verification passed."
 
 echo "📦 Installing binary to ${INSTALL_DIR}/agentgate..."
 tar -xzf "${TMP_DIR}/${TAR_NAME}" -C "$TMP_DIR"

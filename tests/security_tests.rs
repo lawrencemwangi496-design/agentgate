@@ -439,6 +439,7 @@ async fn test_cors_hardened_by_default_and_configurable() {
         audit_logger: Arc::new(AuditLogger::new(config.logs_dir.clone())),
         trusted_proxies: vec!["127.0.0.1".to_string()],
         auth_throttler: agentgate::server::AuthThrottler::default(),
+        rate_limiter: agentgate::server::RequestRateLimiter::disabled(),
     };
 
     // 1. Default configuration: no CORS header returned for cross-origin request
@@ -530,6 +531,7 @@ async fn test_auth_failure_throttling_and_lockout() {
         audit_logger: Arc::new(AuditLogger::new(config.logs_dir.clone())),
         trusted_proxies: vec!["127.0.0.1".to_string()],
         auth_throttler: throttler,
+        rate_limiter: agentgate::server::RequestRateLimiter::disabled(),
     };
 
     let mut router = create_router(&config, state);
@@ -975,6 +977,133 @@ fn test_policy_action_retrieval_and_serialization() {
     let loaded: Policy = serde_yaml::from_str(&yaml_str).unwrap();
     assert_eq!(loaded.name, "pipeline");
     assert!(loaded.get_action("deploy").is_some());
+}
+
+#[tokio::test]
+async fn test_request_rate_limiter_burst_and_throttle() {
+    use agentgate::server::RequestRateLimiter;
+    use std::net::IpAddr;
+
+    let ip: IpAddr = "203.0.113.42".parse().unwrap();
+    // Capacity 3, refill 1 token/sec
+    let limiter = RequestRateLimiter::new(3.0, 1.0);
+
+    // First 3 requests must succeed (consuming burst capacity)
+    assert!(limiter.check_rate_limit(&ip).is_ok());
+    assert!(limiter.check_rate_limit(&ip).is_ok());
+    assert!(limiter.check_rate_limit(&ip).is_ok());
+
+    // 4th immediate request must be rejected with retry_after >= 1
+    let err = limiter.check_rate_limit(&ip);
+    assert!(err.is_err());
+    assert!(err.unwrap_err() >= 1);
+
+    // Other IP should have its own independent bucket
+    let other_ip: IpAddr = "203.0.113.43".parse().unwrap();
+    assert!(limiter.check_rate_limit(&other_ip).is_ok());
+}
+
+#[tokio::test]
+async fn test_rate_limit_middleware_returns_429() {
+    use agentgate::config::AgentGateConfig;
+    use agentgate::server::{AppState, create_router, RequestRateLimiter};
+    use axum::extract::connect_info::ConnectInfo;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    let temp_dir = std::env::temp_dir().join(format!("agentgate-ratelimit-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let config = AgentGateConfig {
+        config_dir: temp_dir.clone(),
+        config_file: temp_dir.join("config.yaml"),
+        client_file: temp_dir.join("client.yaml"),
+        policies_dir: temp_dir.join("policies"),
+        tokens_file: temp_dir.join("tokens.yaml"),
+        certs_dir: temp_dir.join("certs"),
+        logs_dir: temp_dir.join("logs"),
+        pid_file: temp_dir.join("pid"),
+        listen_addr: "127.0.0.1".to_string(),
+        listen_port: 7991,
+        allowed_origins: vec![],
+    };
+
+    // Capacity 2, 0 refill rate
+    let limiter = RequestRateLimiter::new(2.0, 0.0);
+
+    let state = AppState {
+        tokens_file: config.tokens_file.clone(),
+        policies_dir: config.policies_dir.clone(),
+        audit_logger: Arc::new(agentgate::audit::AuditLogger::new(config.logs_dir.clone())),
+        trusted_proxies: vec![],
+        auth_throttler: agentgate::server::AuthThrottler::default(),
+        rate_limiter: limiter,
+    };
+
+    let router = create_router(&config, state);
+
+    let client_addr: SocketAddr = "192.0.2.10:55555".parse().unwrap();
+
+    let make_req = || {
+        let mut req = Request::builder()
+            .uri("/health")
+            .method("GET")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(client_addr));
+        req
+    };
+
+    // Request 1: 200 OK
+    let res1 = router.clone().oneshot(make_req()).await.unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+
+    // Request 2: 200 OK
+    let res2 = router.clone().oneshot(make_req()).await.unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+
+    // Request 3: 429 TOO MANY REQUESTS
+    let res3 = router.clone().oneshot(make_req()).await.unwrap();
+    assert_eq!(res3.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(res3.headers().contains_key("retry-after"));
+}
+
+#[test]
+fn test_find_running_daemon_reads_pid_file() {
+    use agentgate::cli::{find_running_daemon, read_pid};
+    use agentgate::config::AgentGateConfig;
+
+    let temp_dir = std::env::temp_dir().join(format!("agentgate-pid-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let pid_file = temp_dir.join("agentgate.pid");
+    let my_pid = std::process::id() as i32;
+    std::fs::write(&pid_file, my_pid.to_string()).unwrap();
+
+    let config = AgentGateConfig {
+        config_dir: temp_dir.clone(),
+        config_file: temp_dir.join("config.yaml"),
+        client_file: temp_dir.join("client.yaml"),
+        policies_dir: temp_dir.join("policies"),
+        tokens_file: temp_dir.join("tokens.yaml"),
+        certs_dir: temp_dir.join("certs"),
+        logs_dir: temp_dir.join("logs"),
+        pid_file: pid_file.clone(),
+        listen_addr: "127.0.0.1".to_string(),
+        listen_port: 7991,
+        allowed_origins: vec![],
+    };
+
+    let detected = find_running_daemon(&config);
+    assert_eq!(detected, Some(my_pid));
+
+    // Stale PID test: when PID is not running, read_pid returns None and cleans up
+    let stale_pid = 999999;
+    std::fs::write(&pid_file, stale_pid.to_string()).unwrap();
+    assert_eq!(read_pid(&pid_file), None);
+    assert!(!pid_file.exists());
 }
 
 

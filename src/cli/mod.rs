@@ -530,6 +530,70 @@ pub fn read_pid(pid_file: &Path) -> Option<i32> {
     }
 }
 
+/// Find any actively running AgentGate server process across:
+/// 1. The active config's pid file
+/// 2. The system-wide /etc/agentgate/agentgate.pid file
+/// 3. The invoking user's ~/.config/agentgate/agentgate.pid (if running via sudo)
+/// 4. Active Linux processes running `agentgate serve`
+pub fn find_running_daemon(config: &AgentGateConfig) -> Option<i32> {
+    // 1. Check active config's pid file
+    if let Some(pid) = read_pid(&config.pid_file) {
+        return Some(pid);
+    }
+
+    // 2. Check system-wide /etc/agentgate/agentgate.pid
+    let system_pid = Path::new("/etc/agentgate/agentgate.pid");
+    if system_pid != config.pid_file.as_path()
+        && let Some(pid) = read_pid(system_pid)
+    {
+        return Some(pid);
+    }
+
+    // 3. If running as root via sudo, check original user's config pid file
+    if let Ok(sudo_user) = std::env::var("SUDO_USER") {
+        let user_pid = std::path::PathBuf::from(format!(
+            "/home/{}/.config/agentgate/agentgate.pid",
+            sudo_user
+        ));
+        if user_pid != config.pid_file
+            && let Some(pid) = read_pid(&user_pid)
+        {
+            return Some(pid);
+        }
+    }
+
+    // 4. Scan /proc for running `agentgate serve` process
+    if let Ok(entries) = fs::read_dir("/proc") {
+        let current_pid = std::process::id() as i32;
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+            if let Ok(pid) = name_str.parse::<i32>() {
+                if pid == current_pid {
+                    continue;
+                }
+                let cmdline_path = entry.path().join("cmdline");
+                if let Ok(content) = fs::read(&cmdline_path) {
+                    let args: Vec<String> = content
+                        .split(|&b| b == 0)
+                        .filter_map(|s| String::from_utf8(s.to_vec()).ok())
+                        .collect();
+                    let is_agentgate = args
+                        .first()
+                        .map(|b| b.ends_with("agentgate"))
+                        .unwrap_or(false);
+                    let is_serve = args.iter().any(|a| a == "serve");
+                    if is_agentgate && is_serve && unsafe { libc::kill(pid, 0) == 0 } {
+                        return Some(pid);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 pub fn get_process_port(pid: i32) -> Option<u16> {
     let cmdline_path = format!("/proc/{}/cmdline", pid);
     let content = fs::read(cmdline_path).ok()?;
@@ -569,7 +633,7 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
 
     let target_port = args.port.unwrap_or(config.listen_port);
 
-    if let Some(pid) = read_pid(&config.pid_file) {
+    if let Some(pid) = find_running_daemon(config) {
         let active_port = get_process_port(pid).unwrap_or(config.listen_port);
         println!("🟢 AgentGate is already running (PID: {})", pid);
         println!("   Address: https://{}:{}", config.listen_addr, active_port);
@@ -689,14 +753,48 @@ pub fn handle_start(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
 }
 
 pub fn handle_stop(config: &AgentGateConfig) -> Result<()> {
-    let Some(pid) = read_pid(&config.pid_file) else {
-        println!("⚪ AgentGate is not running.");
+    let Some(pid) = find_running_daemon(config) else {
+        // Port-listening fallback check
+        let addr = format!("{}:{}", config.listen_addr, config.listen_port);
+        let port_open = std::net::TcpStream::connect_timeout(
+            &addr
+                .parse()
+                .unwrap_or_else(|_| "127.0.0.1:7991".parse().unwrap()),
+            std::time::Duration::from_millis(300),
+        )
+        .is_ok();
+
+        if port_open {
+            println!(
+                "⚠️  No AgentGate PID file found, but port {} is actively listening.",
+                config.listen_port
+            );
+            println!("💡 If AgentGate is running under systemd or root, stop it with:");
+            println!("   sudo systemctl stop agentgate");
+            println!(
+                "   or terminate the process on port {}: sudo fuser -k {}/tcp",
+                config.listen_port, config.listen_port
+            );
+        } else {
+            println!("⚪ AgentGate is not running.");
+        }
         return Ok(());
     };
 
     println!("Stopping AgentGate (PID: {})...", pid);
-    unsafe {
-        libc::kill(pid, libc::SIGTERM);
+    let kill_res = unsafe { libc::kill(pid, libc::SIGTERM) };
+    if kill_res != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EPERM) {
+            eprintln!(
+                "❌ Permission denied: AgentGate (PID: {}) is running under another user (such as root).",
+                pid
+            );
+            eprintln!("💡 Please run with sudo: sudo agentgate stop");
+            bail!("Permission denied stopping AgentGate (PID: {})", pid);
+        } else {
+            eprintln!("⚠️ Failed to send signal to PID {}: {}", pid, err);
+        }
     }
 
     let start = std::time::Instant::now();
@@ -708,12 +806,18 @@ pub fn handle_stop(config: &AgentGateConfig) -> Result<()> {
     }
 
     if unsafe { libc::kill(pid, 0) == 0 } {
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-        }
+        let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
     }
 
     let _ = fs::remove_file(&config.pid_file);
+    let _ = fs::remove_file("/etc/agentgate/agentgate.pid");
+    if let Ok(sudo_user) = std::env::var("SUDO_USER") {
+        let user_pid = std::path::PathBuf::from(format!(
+            "/home/{}/.config/agentgate/agentgate.pid",
+            sudo_user
+        ));
+        let _ = fs::remove_file(user_pid);
+    }
     println!("🛑 AgentGate stopped.");
 
     Ok(())
@@ -727,7 +831,7 @@ pub fn handle_restart(args: StartArgs, config: &AgentGateConfig) -> Result<()> {
 }
 
 pub fn handle_status(args: StatusArgs, config: &AgentGateConfig) -> Result<()> {
-    let pid_opt = read_pid(&config.pid_file);
+    let pid_opt = find_running_daemon(config);
     let target_host = args
         .host
         .or_else(|| pid_opt.and_then(get_process_listen))
@@ -1281,7 +1385,7 @@ pub async fn handle_main_menu(config: &AgentGateConfig) -> Result<()> {
     use std::io::Write;
 
     loop {
-        let pid_opt = read_pid(&config.pid_file);
+        let pid_opt = find_running_daemon(config);
         let client_cfg = crate::client::load_client_config().ok().flatten();
 
         println!("\x1b[1;36m==========================================================\x1b[0m");
