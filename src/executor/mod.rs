@@ -145,34 +145,83 @@ impl ParsedCommand {
     }
 }
 
+/// Resolve the UID, GID, and home directory of a Unix username
+pub fn resolve_os_user(username: &str) -> Result<(u32, u32, PathBuf)> {
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        let c_user = CString::new(username)
+            .map_err(|_| anyhow::anyhow!("Invalid username containing null bytes"))?;
+        let pwd = unsafe { libc::getpwnam(c_user.as_ptr()) };
+        if pwd.is_null() {
+            bail!("System user '{}' does not exist on this machine", username);
+        }
+        let (uid, gid, home) = unsafe {
+            let home_cstr = std::ffi::CStr::from_ptr((*pwd).pw_dir);
+            let home_str = home_cstr.to_string_lossy().into_owned();
+            ((*pwd).pw_uid, (*pwd).pw_gid, PathBuf::from(home_str))
+        };
+        Ok((uid, gid, home))
+    }
+    #[cfg(not(unix))]
+    {
+        bail!("Per-token OS users are only supported on Unix systems");
+    }
+}
+
 /// Execute a parsed command with hardened security controls:
 /// - Executes the resolved binary directly without shell
 /// - Strips environment variables (env_clear) to prevent secret leakage
 /// - Injects minimal, sanitized standard environment
 /// - Enforces non-interactive stdin (Stdio::null)
+/// - Drops privileges to dedicated per-token OS user (uid, gid, empty groups) if configured
 /// - Enforces strict output size limit (5MB) to prevent RAM exhaustion
 /// - Kills child process if execution timeout expires
-pub async fn execute(cmd: &ParsedCommand, timeout_secs: u64) -> Result<ExecResult> {
+pub async fn execute(
+    cmd: &ParsedCommand,
+    timeout_secs: u64,
+    os_user: Option<&str>,
+) -> Result<ExecResult> {
     let start = Instant::now();
-
-    // Determine current safe user and home for environment
-    let current_user = std::env::var("USER").unwrap_or_else(|_| "agentgate".to_string());
-    let current_home = dirs::home_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "/tmp".to_string());
 
     let mut builder = Command::new(&cmd.binary_path);
     builder.args(&cmd.args);
 
-    // 1. Environment Sanitization
+    // 1. Determine user identity & isolate OS privileges
+    let default_user = std::env::var("USER").unwrap_or_else(|_| "agentgate".to_string());
+    let default_home = dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/tmp".to_string());
+
+    let (target_user, target_home) = if let Some(user) = os_user {
+        let (uid, gid, home) = resolve_os_user(user)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            builder.as_std_mut().uid(uid).gid(gid);
+            unsafe {
+                builder.as_std_mut().pre_exec(move || {
+                    if libc::setgroups(0, std::ptr::null()) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        (user.to_string(), home.to_string_lossy().to_string())
+    } else {
+        (default_user, default_home)
+    };
+
+    // 2. Environment Sanitization
     builder.env_clear();
     builder.env("PATH", "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin");
     builder.env("LANG", "C.UTF-8");
     builder.env("TERM", "dumb");
-    builder.env("USER", &current_user);
-    builder.env("HOME", &current_home);
+    builder.env("USER", &target_user);
+    builder.env("HOME", &target_home);
 
-    // 2. Prevent interactive input hanging
+    // 3. Prevent interactive input hanging
     builder.stdin(Stdio::null());
     builder.stdout(Stdio::piped());
     builder.stderr(Stdio::piped());

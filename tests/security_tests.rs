@@ -348,8 +348,8 @@ fn test_token_store_concurrent_revocation_and_validation() {
 
     let (raw1, raw2) = {
         let mut store = TokenStore::load(&tokens_file).unwrap();
-        let r1 = store.create("token1", "test-policy", None).unwrap();
-        let r2 = store.create("token2", "test-policy", None).unwrap();
+        let r1 = store.create("token1", "test-policy", None, None).unwrap();
+        let r2 = store.create("token2", "test-policy", None, None).unwrap();
         (r1, r2)
     };
 
@@ -647,6 +647,65 @@ fn test_command_name_consistency_under_all_rules() {
     assert!(policy_with_path_rule.matches("/usr/local/bin/deploy-helper", &[]));
     assert!(policy_with_path_rule.matches("deploy-helper", &[]));
 }
+
+#[test]
+fn test_per_token_os_user_creation_and_validation() {
+    use agentgate::auth::TokenStore;
+
+    let temp_dir = std::env::temp_dir().join(format!("agentgate_os_user_test_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let tokens_file = temp_dir.join("tokens.yaml");
+
+    let raw_token = {
+        let mut store = TokenStore::load(&tokens_file).unwrap();
+        store
+            .create("isolated-agent", "standard", None, Some("ag-isolated".to_string()))
+            .unwrap()
+    };
+
+    // Reload from disk to verify YAML persistence of os_user
+    let mut store = TokenStore::load(&tokens_file).unwrap();
+    let tokens = store.list();
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].name, "isolated-agent");
+    assert_eq!(tokens[0].os_user, Some("ag-isolated".to_string()));
+
+    // Validation returns the stored os_user
+    let validated = store.validate(&raw_token).unwrap().expect("Token should validate");
+    assert_eq!(validated.os_user, Some("ag-isolated".to_string()));
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_resolve_os_user() {
+    use agentgate::executor::resolve_os_user;
+
+    // Resolving standard system user (root) succeeds on Unix
+    #[cfg(unix)]
+    {
+        let root_res = resolve_os_user("root");
+        assert!(root_res.is_ok());
+        let (uid, _gid, _home) = root_res.unwrap();
+        assert_eq!(uid, 0);
+    }
+
+    // Resolving a non-existent user returns an error
+    let bad_user = resolve_os_user("definitely_nonexistent_user_agentgate_99999");
+    assert!(bad_user.is_err());
+    assert!(bad_user.unwrap_err().to_string().contains("does not exist"));
+}
+
+#[tokio::test]
+async fn test_executor_with_nonexistent_os_user_fails_gracefully() {
+    use agentgate::executor::{self, ParsedCommand};
+
+    let cmd = ParsedCommand::parse("uptime").unwrap();
+    let res = executor::execute(&cmd, 5, Some("definitely_nonexistent_user_agentgate_99999")).await;
+    assert!(res.is_err());
+    assert!(res.unwrap_err().to_string().contains("does not exist"));
+}
+
 
 
 

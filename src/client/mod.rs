@@ -300,7 +300,7 @@ pub async fn handle_interactive_login(
             let config = crate::config::AgentGateConfig::load()?;
             let mut token_store = crate::auth::TokenStore::load(&config.tokens_file)?;
             let token_name = format!("cli-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-            let new_token = token_store.create(&token_name, policy_name, None)?;
+            let new_token = token_store.create(&token_name, policy_name, None, None)?;
             token_store.save()?;
             println!(
                 "✓ Generated token '{}' (Policy: {}, Never expires)",

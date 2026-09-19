@@ -247,6 +247,14 @@ pub enum TokenSubcommand {
         /// Token expiration duration (e.g. '24h', '7d', '30m'). Defaults to never.
         #[arg(long)]
         expires: Option<String>,
+
+        /// Run commands under an isolated, dedicated OS system user (ag-<name>)
+        #[arg(long)]
+        user_mode: bool,
+
+        /// Explicit OS system user name to bind to
+        #[arg(long)]
+        os_user: Option<String>,
     },
 
     /// List all generated tokens
@@ -313,6 +321,8 @@ struct TokenRow {
     name: String,
     #[tabled(rename = "POLICY")]
     policy: String,
+    #[tabled(rename = "OS USER")]
+    os_user: String,
     #[tabled(rename = "CREATED AT")]
     created_at: String,
     #[tabled(rename = "EXPIRES")]
@@ -778,6 +788,32 @@ pub fn handle_update() -> Result<()> {
     Ok(())
 }
 
+/// Helper to create a system user for token isolation
+pub fn create_system_user(username: &str) -> Result<()> {
+    if crate::executor::resolve_os_user(username).is_ok() {
+        return Ok(());
+    }
+    let status = std::process::Command::new("useradd")
+        .args(["--system", "--shell", "/usr/sbin/nologin", "--no-create-home", username])
+        .status()
+        .with_context(|| format!("Failed to execute 'useradd' for user '{}'", username))?;
+    if !status.success() {
+        bail!("Failed to create system user '{}' with useradd (exit code {:?})", username, status.code());
+    }
+    Ok(())
+}
+
+/// Helper to remove a system user upon token revocation
+pub fn remove_system_user(username: &str) -> Result<()> {
+    if crate::executor::resolve_os_user(username).is_err() {
+        return Ok(());
+    }
+    let _ = std::process::Command::new("userdel")
+        .arg(username)
+        .status();
+    Ok(())
+}
+
 pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> Result<()> {
     let mut store = TokenStore::load(&config.tokens_file)?;
 
@@ -786,6 +822,8 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
             name,
             policy,
             expires,
+            user_mode,
+            os_user,
         } => {
             // Verify policy exists
             let policy_store = PolicyStore::load(&config.policies_dir)?;
@@ -807,7 +845,17 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
                 None
             };
 
-            let raw_token = store.create(&name, &policy, duration)?;
+            let bound_os_user = if user_mode || os_user.is_some() {
+                let u = os_user.unwrap_or_else(|| format!("ag-{}", name));
+                if let Err(e) = create_system_user(&u) {
+                    eprintln!("⚠️  Notice: system user '{}' could not be auto-created: {}. Please ensure user exists.", u, e);
+                }
+                Some(u)
+            } else {
+                None
+            };
+
+            let raw_token = store.create(&name, &policy, duration, bound_os_user.clone())?;
 
             let expires_display = match duration {
                 Some(d) => {
@@ -825,6 +873,7 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
             println!("----------------------------------------------------------------------");
             println!("NAME:       {}", name);
             println!("POLICY:     {}", policy);
+            println!("OS USER:    {}", bound_os_user.as_deref().unwrap_or("daemon default (no user isolation)"));
             println!("EXPIRES:    {}", expires_display);
             println!("TOKEN:      {}", raw_token);
             println!("----------------------------------------------------------------------");
@@ -857,6 +906,7 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
                 .map(|t| TokenRow {
                     name: t.name.clone(),
                     policy: t.policy.clone(),
+                    os_user: t.os_user.clone().unwrap_or_else(|| "default".to_string()),
                     created_at: t.created_at.format("%Y-%m-%d %H:%M").to_string(),
                     expires: format_expiry(t.expires_at),
                     last_used_at: t
@@ -871,7 +921,18 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
             println!("{}", table);
         }
         TokenSubcommand::Revoke { name } => {
+            let token_entry = store.list().iter().find(|t| t.name == name).cloned();
             if store.revoke(&name)? {
+                if let Some(token) = token_entry
+                    && let Some(ref os_user) = token.os_user
+                {
+                    let _ = remove_system_user(os_user);
+                }
+                // Also clean up any sudoers fragment
+                let sudoers_file = Path::new("/etc/sudoers.d").join(format!("agentgate-{}", name));
+                if sudoers_file.exists() {
+                    let _ = fs::remove_file(&sudoers_file);
+                }
                 println!(
                     "✓ Token '{}' has been revoked and can no longer be used.",
                     name
@@ -1255,6 +1316,8 @@ fn handle_token_menu(config: &AgentGateConfig) -> Result<()> {
                 name,
                 policy: policy.to_string(),
                 expires,
+                user_mode: false,
+                os_user: None,
             };
             handle_token(Some(token_sub), config)?;
         }
@@ -1382,7 +1445,7 @@ async fn handle_server_setup_wizard(config: &AgentGateConfig) -> Result<()> {
             .as_deref()
             .and_then(|e| parse_duration(e).ok().flatten());
         let token_name = format!("agent-{}", &uuid::Uuid::new_v4().to_string()[..6]);
-        let raw_token = store.create(&token_name, policy, duration)?;
+        let raw_token = store.create(&token_name, policy, duration, None)?;
         store.save()?;
 
         println!("\n🔑 Access Token Created:");

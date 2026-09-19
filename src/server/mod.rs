@@ -495,8 +495,8 @@ async fn exec_handler(
             .into_response();
     }
 
-    // 4. Execute command safely via executor (no shell, with timeout)
-    let exec_res = match executor::execute(&parsed_cmd, 30).await {
+    // 4. Execute command safely via executor (no shell, with timeout and per-token OS user)
+    let exec_res = match executor::execute(&parsed_cmd, 30, stored_token.os_user.as_deref()).await {
         Ok(res) => res,
         Err(e) => {
             let reason = format!("Execution error: {}", e);
