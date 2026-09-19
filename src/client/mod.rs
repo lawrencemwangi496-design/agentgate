@@ -99,7 +99,7 @@ pub async fn handle_login(
 ) -> Result<()> {
     use std::io::IsTerminal;
 
-    // If running in terminal without explicit token, launch interactive wizard (like gh auth login)
+    // If running in terminal without explicit token, launch interactive wizard
     if token_opt.is_none() && io::stdin().is_terminal() {
         return handle_interactive_login(server_opt, token_opt, insecure).await;
     }
@@ -866,7 +866,7 @@ pub async fn handle_mcp() -> Result<()> {
     Ok(())
 }
 
-/// Interactive TUI shell for executing commands continuously (like gh / local console)
+/// Interactive shell for executing commands continuously
 pub async fn handle_shell(
     server_override: Option<String>,
     token_override: Option<String>,
@@ -943,9 +943,19 @@ pub async fn handle_shell(
             break;
         }
 
-        let cmd = line.trim();
+        let mut cmd = line.trim();
         if cmd.is_empty() {
             continue;
+        }
+
+        // Strip accidental 'agentgate ' or 'agentgate exec ' prefix inside the interactive shell
+        if let Some(stripped) = cmd.strip_prefix("agentgate ") {
+            let stripped = stripped.trim();
+            if let Some(inner) = stripped.strip_prefix("exec ") {
+                cmd = inner.trim();
+            } else {
+                cmd = stripped;
+            }
         }
 
         match cmd {

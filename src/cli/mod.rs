@@ -27,50 +27,50 @@ pub enum Commands {
     /// Initialize configuration, default policies, and TLS certificates
     Init(InitArgs),
 
-    /// Start the AgentGate daemon in the background (like tailscale up)
+    /// Start the AgentGate daemon in the background
     Start(StartArgs),
 
-    /// Stop the running AgentGate daemon (like tailscale down)
+    /// Stop the running AgentGate daemon
     Stop,
 
     /// Restart the running AgentGate daemon
     Restart(StartArgs),
 
-    /// Run the AgentGate server in the foreground (for debugging or systemd)
+    /// Run the AgentGate server in the foreground
     Serve(ServeArgs),
 
     /// Check daemon status, health, and loaded policies
     Status(StatusArgs),
 
-    /// Execute an authorized system command through AgentGate (client tool, like gh)
+    /// Execute an authorized system command through AgentGate
     #[command(name = "exec", alias = "run")]
     Exec(ExecArgs),
 
-    /// Execute a named multi-step action defined in a policy (e.g. CI/CD pipeline)
+    /// Execute a named multi-step action defined in a policy
     #[command(name = "action", alias = "act")]
     Action(ActionArgs),
 
-    /// Interactive TUI shell to execute commands directly (like gh / local console)
+    /// Interactive shell to execute commands directly
     #[command(name = "shell", aliases = ["console", "connect", "sh"])]
     Shell(ShellArgs),
 
-    /// Open interactive manager menu (press 1, 2, 3 to configure and manage)
+    /// Open interactive manager menu
     #[command(name = "menu", aliases = ["ui", "manager"])]
     Menu,
 
-    /// Log in AI agent client with an access token (like gh auth login)
+    /// Log in client with an access token
     Login(LoginArgs),
 
     /// Log out client and remove saved credentials
     Logout,
 
-    /// Show current client authentication status (like gh auth status)
+    /// Show current client authentication status
     Whoami,
 
     /// Print AI agent instruction guide and system prompt rules
     Guide,
 
-    /// Start Model Context Protocol (MCP) server for native AI tool calling
+    /// Start Model Context Protocol server for native AI tool calling
     Mcp,
 
     /// Manage authentication tokens for AI agents
@@ -1226,7 +1226,7 @@ pub fn handle_token(cmd: Option<TokenSubcommand>, config: &AgentGateConfig) -> R
             println!("TOKEN:      {}", raw_token);
             println!("----------------------------------------------------------------------");
             println!("⚠️  Save this token now! It will NOT be shown again.");
-            println!("\n🚀 Quick Agent Login (like gh auth login):");
+            println!("\n🚀 Quick Agent Login:");
             println!("  agentgate login --token {}", raw_token);
             println!("\nThen execute commands effortlessly without passwords or token wastage:");
             println!("  agentgate exec uptime");
