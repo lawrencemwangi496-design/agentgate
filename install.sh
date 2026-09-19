@@ -4,6 +4,7 @@ set -e
 REPO="lawrencemwangi496-design/agentgate"
 TAR_NAME="agentgate-linux-x86_64.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${TAR_NAME}"
+CHECKSUMS_URL="https://github.com/${REPO}/releases/latest/download/SHA256SUMS"
 
 echo ""
 echo "=========================================================="
@@ -15,16 +16,28 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 if [ "$OS" != "Linux" ] || [ "$ARCH" != "x86_64" ]; then
-    echo "⚠️ Warning: Automated prebuilt binary is currently built for Linux x86_64 (detected $OS $ARCH)."
-    echo "Attempting to install via cargo if available..."
+    echo "⚠️  Note: Prebuilt binary is currently packaged for Linux x86_64 (detected $OS $ARCH)."
+    echo "Falling back to compiling from source via Cargo..."
     if command -v cargo >/dev/null 2>&1; then
         cargo install --git "https://github.com/${REPO}.git"
         echo "✅ Installed via Cargo!"
         exit 0
     else
-        echo "❌ Cargo not found. Please install Rust from https://rustup.rs"
+        echo "❌ Cargo not found. Please install Rust from https://rustup.rs or use a supported Linux x86_64 system."
         exit 1
     fi
+fi
+
+# Verify SHA-256 verification tool is available before proceeding (fail-closed)
+if command -v sha256sum >/dev/null 2>&1; then
+    SHA_TOOL="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    SHA_TOOL="shasum"
+else
+    echo "❌ Error: Neither 'sha256sum' nor 'shasum' is installed on this system." >&2
+    echo "   AgentGate requires cryptographic checksum verification to prevent supply chain tampering." >&2
+    echo "   Please install coreutils or perl-Digest-SHA, or install via 'cargo install --git https://github.com/${REPO}.git'" >&2
+    exit 1
 fi
 
 # Determine install location
@@ -36,16 +49,36 @@ else
 fi
 
 TMP_DIR="$(mktemp -d)"
-echo "⬇️ Downloading latest AgentGate release..."
+echo "⬇️  Downloading latest AgentGate release and verification checksums..."
 
 if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${TAR_NAME}"
+    curl -fsSL "$CHECKSUMS_URL" -o "${TMP_DIR}/SHA256SUMS"
 elif command -v wget >/dev/null 2>&1; then
     wget -qO "${TMP_DIR}/${TAR_NAME}" "$DOWNLOAD_URL"
+    wget -qO "${TMP_DIR}/SHA256SUMS" "$CHECKSUMS_URL"
 else
-    echo "❌ Error: Neither curl nor wget is installed."
+    echo "❌ Error: Neither curl nor wget is installed." >&2
     exit 1
 fi
+
+# Cryptographic integrity verification (fail-closed)
+echo "🔒 Verifying release binary checksum against published SHA256SUMS..."
+(
+    cd "$TMP_DIR"
+    if [ "$SHA_TOOL" = "sha256sum" ]; then
+        grep "$TAR_NAME" SHA256SUMS | sha256sum -c --status
+    else
+        grep "$TAR_NAME" SHA256SUMS | shasum -a 256 -c --status
+    fi
+)
+if [ $? -ne 0 ]; then
+    echo "❌ FATAL: Checksum verification failed! The downloaded archive does not match the official SHA-256 hash." >&2
+    echo "   This could indicate a network error, mirror tampering, or compromised artifact." >&2
+    rm -rf "$TMP_DIR"
+    exit 1
+fi
+echo "✓ Checksum verification passed."
 
 echo "📦 Installing binary to ${INSTALL_DIR}/agentgate..."
 tar -xzf "${TMP_DIR}/${TAR_NAME}" -C "$TMP_DIR"
