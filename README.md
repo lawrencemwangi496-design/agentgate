@@ -1,265 +1,246 @@
-# AgentGate 🚪⚡
+# AgentGate
 
-> **The structured privilege bridge and safety seatbelt for autonomous AI agents and automation.**  
-> Execute commands safely on your Linux machines without sharing SSH keys, exposing passwords, or granting unrestricted `sudo`.
+AgentGate is a policy-enforcement daemon and scoped execution proxy for autonomous AI agents and automation systems on Linux.
+
+When automated tools (such as coding agents, CI/CD runners, or remote LLMs) need to run commands on a host, granting raw SSH access or unrestricted `sudo` (`NOPASSWD: ALL`) creates an uncontained failure domain. An errant model hallucination, an unescaped path, or a prompt injection attack can compromise or destroy host state.
+
+AgentGate addresses this by acting as a gateway between automation callers and the operating system. It validates requests against declarative allow/deny policies, blocks destructive commands through universal guardrails, drops privileges to dedicated system accounts, and executes binaries directly without an intermediate shell parser.
+
+AgentGate is **not** an SSH replacement, a hypervisor, or a container runtime. It is an execution proxy designed to limit the blast radius of automated callers.
 
 ---
 
-## 🧭 Threat Model: Seatbelt vs. Prison
+## Threat Model and Boundaries
 
-AgentGate is designed with an explicit, honest threat model:
+Understanding what AgentGate enforces—and what it does not—is critical for deploying it safely.
 
-| What AgentGate IS | What AgentGate IS NOT |
+| Capability | Scope |
 | :--- | :--- |
-| 🛡️ **An accident guardrail ("seatbelt")** against LLM hallucinations, catastrophic accidental commands (`rm -rf /`, `/boot` wipes, disk formatting), and naive prompt injection. | 🚫 **NOT a virtualized sandbox** against an adversarial agent holding an unrestricted root token without OS user boundaries. |
-| 🔑 **A structured credential bridge** providing revokable, scoped bearer tokens with optional per-token unprivileged OS users (`ag-<name>`). | 🚫 **NOT a magic barrier against Turing-complete interpreters:** If a policy allows `python3` or `perl` in root mode, the agent has the full power of that interpreter. |
-| 📜 **An immutable, tamper-evident audit logger** that records real socket-level peer IPs, execution duration, and exit codes. | 🚫 **NOT a replacement for containers/VMs** when executing untrusted or adversarial third-party code. |
-| ⚡ **A native agent interface** offering a clean HTTP/REST API, native CLI wrapper (`agentgate exec`), and Model Context Protocol (MCP) server. | 🖥️ **A decoupled web control plane** with RFC 6238 TOTP 2FA, live policy linting, and PC file import/export. |
+| **Accidental Destruction Guardrail** | Intercepts destructive patterns (`rm -rf /`, raw disk writes via `dd`, filesystem formatting via `mkfs`, partition wipes, host reboots) before process launch, even under broad policies. |
+| **Direct POSIX Invocation** | Passes arguments directly as array pointers (`execvp`). Shell metacharacters (`;`, `&&`, `\|`, `` ` ``, `$()`, `>`, `<`) are rejected by the parser, preventing shell command-chaining injection. |
+| **Least-Privilege OS Users** | Drops UID, GID, and supplementary groups to dedicated unprivileged system users (e.g., `ag-<name>`) via `setresuid` prior to execution. |
+| **Granular Sudoers Generation** | Generates minimal `/etc/sudoers.d/` grants for specific commands, rejecting binaries with known shell escapes (GTFOBins) and prohibiting wildcards. |
+| **Audit Logging** | Writes append-only `JSONL` records capturing socket-verified peer IPs, token names, command arguments, duration, and exit codes. |
+| **Decoupled Control Plane** | Provides a web dashboard authenticated via RFC 6238 TOTP (Google Authenticator, 1Password, Bitwarden) for policy management and real-time telemetry. |
 
-> [!NOTE]
-> If you are giving an agent broad permissions, **enable per-token OS user isolation (`--user-mode`) or security tiers (`--tier ops`)**. Denylists protect against accidental destruction, but OS user separation is what creates a true security boundary.
+### What AgentGate Does Not Do
 
----
-
-## Why AgentGate is Better than SSH for AI Agents
-
-| Feature | SSH / sudo | AgentGate 🚪 |
-| :--- | :--- | :--- |
-| **Credentials** | Raw SSH private keys or root passwords shared directly with the LLM | Scoped, revokable SHA-256 tokens (`ag_...`) or RFC 6238 TOTP admin sessions |
-| **Safety Guardrails** | All-or-nothing root access (`sudo NOPASSWD: ALL`) | **Universal Guardrails:** Destructive commands (`rm -rf /`, `mkfs`, `dd`, `shutdown`, `/etc/shadow`) are permanently blocked at the gateway level |
-| **Execution Layer** | Raw interactive PTY allows shell piping, background jobs, and escape tricks | **No Shell Parser:** Commands execute directly via POSIX `execvp`. Shell metacharacters (`;`, `&&`, `\|`, `` ` ``, `$()`, `>`, `<`) are rejected by the parser |
-| **Privilege Dropping** | Requires complex custom PAM and sudo rules per key | **Per-Token OS Users:** Daemon drops UID, GID, and supplementary groups to dedicated system users (`ag-<name>`) |
-| **Audit Trail** | Fragmented bash history (easily altered or cleared) | Structured `JSONL` audit log with socket-verified peer IPs, duration, and exit codes |
-| **Revocation** | Rotating SSH keys or changing passwords disrupts multiple services | Instant single-token revocation with atomic file locking (`flock`) |
-| **Ergonomics** | Fragile SSH timeouts, complex TTY prompts, password hangs | Native CLI (`agentgate exec`), JSON REST API, built-in MCP server, and live web control console |
+- **It does not sandbox arbitrary code inside interpreters:** If a policy permits `/usr/bin/python3` or `/usr/bin/bash` without OS user privilege dropping, the agent inherits the full capabilities of that interpreter. For untrusted or autonomous agents, dedicated unprivileged OS accounts (`--user-mode`) are required.
+- **It does not replace virtualization or containers:** AgentGate regulates access to host binaries. It does not provide filesystem virtualization, kernel isolation, or cgroup memory/CPU limits.
+- **It does not replace SSH:** SSH is a secure transport and interactive shell protocol. AgentGate is a non-interactive execution API and policy filter.
 
 ---
 
-## 🏗️ Architecture: Daemon vs. Client
+## System Architecture
 
-AgentGate is built as two purpose-built binaries:
+AgentGate consists of two binaries and an optional standalone control console:
 
-1. **`agentgated`** — **The Engine (Daemon)**
-   - Runs as a headless system service on the host machine.
-   - Listens on Unix domain sockets or HTTP/HTTPS (`0.0.0.0:7991`).
-   - Handles POSIX command execution, policy enforcement, audit streaming (SSE), and RFC 6238 TOTP authentication.
-   - Manages token stores, system users, and sudoers configurations.
+```
+┌────────────────────────────────────────────────────────┐
+│                      Callers                           │
+│   AI Agents (MCP)  •  CLI / Scripts  •  HTTP Clients   │
+└───────────────────────────┬────────────────────────────┘
+                            │ Bearer Token (ag_...)
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│                   agentgated (Daemon)                  │
+│                                                        │
+│  ┌──────────────────┐  ┌────────────────────────────┐  │
+│  │ Policy Engine    │  │ Privilege Dropping         │  │
+│  │ - Allow / Deny   │  │ - POSIX setresuid / gid    │  │
+│  │ - Guardrails     │  │ - Dedicated system users   │  │
+│  └──────────────────┘  └────────────────────────────┘  │
+│  ┌──────────────────┐  ┌────────────────────────────┐  │
+│  │ Direct Exec      │  │ Audit & Auth               │  │
+│  │ - No sh -c       │  │ - RFC 6238 TOTP (Admin)    │  │
+│  │ - execvp array   │  │ - JSONL structured audit   │  │
+│  └──────────────────┘  └────────────────────────────┘  │
+└───────────────────────────┬────────────────────────────┘
+                            ▼
+               Target Operating System
+```
 
-2. **`agentgate`** — **The Operator Interface (Client CLI)**
-   - Terminal interactive manager (TUI) for configuring servers, creating tokens, and viewing logs.
-   - CLI execution client (`agentgate exec <command>`) for operators and scripts.
-   - Built-in Model Context Protocol (`agentgate mcp`) server for AI agents.
+1. **`agentgated`** (Host Daemon)
+   - Background service running as root or a dedicated service account.
+   - Binds to Unix domain socket or local/remote network interfaces (`127.0.0.1:7991` or `0.0.0.0:7991`).
+   - Enforces policies, drops privileges, executes processes, and streams audit events via SSE.
+   - Manages token records, system user accounts, and RFC 6238 TOTP secrets.
+
+2. **`agentgate`** (Operator CLI & MCP Server)
+   - Interactive terminal manager (TUI) for local server configuration, token management, and status checks.
+   - CLI execution client (`agentgate exec <command>`) for scripts and CI/CD pipelines.
+   - Model Context Protocol (MCP) server for integrating with Claude Desktop, Cursor, or custom agent runners.
+
+3. **Web Control Console** (`console.html`)
+   - Standalone single-page interface for remote monitoring and administration.
+   - Authenticates via RFC 6238 TOTP (compatible with standard mobile/desktop authenticator apps).
+   - Features client-side policy editing, real-time schema validation, local PC import/export, and daemon restart signaling.
 
 ---
 
-## ⚡ 1-Minute Quick Start
+## Installation
 
-### 1. Install
+### Binary Releases (Linux x86_64)
 
-Install directly on your Linux x86_64 server:
+Install via the automated installer script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lawrencemwangi496-design/agentgate/main/install.sh | sudo bash
 ```
 
-*The installer verifies the release archive against official `SHA256SUMS` and fails closed if verification fails.*
+The script verifies downloaded archives against published SHA-256 checksums and aborts if verification fails.
 
-Or build from source:
+### Building From Source
+
+Prerequisites: Rust 1.80+ and a standard C compiler toolchain.
 
 ```bash
+git clone https://github.com/lawrencemwangi496-design/agentgate.git
+cd agentgate
 cargo build --release --bins
-# Binaries located in target/release/agentgate and target/release/agentgated
 ```
 
-### 2. Launch the Interactive Manager
-
-Run `agentgate` to launch the interactive terminal manager:
-
-```bash
-agentgate
-```
-
-```text
-==========================================================
-                 🚪 AgentGate Manager
-==========================================================
-  AgentGate:     🟢 RUNNING (127.0.0.1:7991, PID: 4210)
-  Client Config: 🟢 Connected (https://127.0.0.1:7991)
-
-  1) Set up AgentGate (Server)
-     → Configure network, TLS certificates & start service
-  2) Connect to AgentGate (Client)
-     → Configure laptop to connect to a remote server
-  3) Secure Shell (Interactive console)
-  4) Manage Tokens (Create, List, Revoke)
-  5) View Audit Logs
-  6) Stop AgentGate
-  7) Update AgentGate
-  0) Exit
-
-Select an option [0-7]: 
-```
-
-- **Option 1 (Set up Server):** Starts the server, generates TLS certificates, creates an agent token, and automatically configures your local client.
-- **Option 3 (Secure Shell):** Drops directly into the interactive agent console to run permitted commands live.
+The compiled binaries will be placed in:
+- `target/release/agentgate` (Client CLI)
+- `target/release/agentgated` (Host Daemon)
 
 ---
 
-## 🖥️ Decoupled Web Control Console & Remote Management
+## Getting Started
 
-AgentGate includes an industrial charcoal/slate web dashboard (`src/web/console.html`) designed for browser-based remote control of the daemon.
+### 1. Initialize and Start the Daemon
 
-```
-┌─────────────────────────┐               HTTP/HTTPS API (JSON/SSE)
-│   Any Browser Window    │ ────────────────────────────────────────► ┌───────────────────────────┐
-│ (PC / Laptop / Phone)   │ ◄──────────────────────────────────────── │ agentgated (Remote Daemon)│
-│ console.html            │   Token / TOTP Bearer Session             │ Listening on 0.0.0.0:7991 │
-└─────────────────────────┘                                           └───────────────────────────┘
-```
+Using the interactive manager:
 
-### Key Capabilities:
-- **RFC 6238 TOTP 2FA (Zero External Dependencies)**: Log in securely using **Google Authenticator**, **1Password**, **Bitwarden**, or **Aegis**. No SMTP server, no email deliveries, and no external third-party services required.
-- **Decoupled Remote Connection**: Open `console.html` from any PC or static host, type in your daemon's IP, port, and authentication code to connect.
-- **Local PC Policy Import (`📥 Import`) & Export (`📤 Export`)**: Load existing policy YAML files directly from your computer into the browser editor, or download server policies to your PC with one click.
-- **Live Policy Linter & Schema Validator**: Validates YAML formatting in real time, warns if tabs are used for indentation, counts allow/deny rules, and flags dangerous unguardrailed commands (`rm -rf`, `mkfs`, `dd`, `chmod 777`).
-- **Remote Host Daemon Restart**: Initiate a clean restart of the remote `agentgated` process directly from the top toolbar with confirmation.
-
-### Managing TOTP via CLI:
 ```bash
-# View or initialize the 2FA secret (prints Base32 key and otpauth:// URI):
-agentgated totp setup
+sudo agentgate
+```
 
-# Regenerate a new 2FA secret:
-agentgated totp setup --reset
+Select `1) Set up AgentGate (Server)` to initialize configuration directories, generate TLS certificates, configure the service, and create the initial administrator token.
 
-# Check whether 2FA is active:
+Alternatively, run the daemon manually:
+
+```bash
+# Start the daemon in the foreground
+sudo agentgated --listen 127.0.0.1:7991
+```
+
+### 2. Configure TOTP for Dashboard Access
+
+To access the web console, generate a two-factor authentication secret:
+
+```bash
+sudo agentgated totp setup
+```
+
+This outputs a Base32 secret key and an `otpauth://` URI. Add this key to your authenticator app (Google Authenticator, 1Password, Bitwarden, or Aegis).
+
+To check status or regenerate keys:
+
+```bash
+# Check configuration status
 agentgated totp status
+
+# Regenerate secret (invalidates previous keys)
+sudo agentgated totp setup --reset
 ```
+
+### 3. Issue Scoped Agent Tokens
+
+Generate tokens bound to specific policies and privilege levels:
+
+```bash
+# Diagnostic token: read-only policy, runs as dedicated unprivileged user ag-monitor
+sudo agentgate token create --name monitor --policy read-only --user-mode
+
+# Operational token: scoped sudoers entries for specific maintenance commands
+sudo agentgate token create --name webops --tier ops
+
+# Administrative token: short-lived (max 24h)
+sudo agentgate token create --name emergency-admin --tier admin --expires 4h
+```
+
+Tokens are displayed once upon creation and stored as SHA-256 hashes on disk.
 
 ---
 
-## 🛡️ Default Starter Policies
+## Execution Policies
 
-AgentGate ships with starter policies tailored to distinct agent roles:
+Policies are declarative YAML files stored in `/etc/agentgate/policies/` (or `~/.config/agentgate/policies/`).
 
-### 1. `agent.yaml` — Autonomous Agent Seatbelt
-Designed for trusted autonomous agents (Claude, Gemini, Cursor) that need freedom to run build commands, diagnostics, and git, while protected against catastrophic accidents:
+### Standard Policy (`agent.yaml`)
+Designed for trusted development agents that require general execution freedom with guardrails against catastrophic accidents:
 
 ```yaml
 name: agent
-description: "Seatbelt policy for autonomous AI agents — broad command execution with strict destructive guardrails"
+description: "General execution with safety guardrails against catastrophic destruction"
 guardrails: true
 allow:
   - command: "*"
     args: ["*"]
 deny:
-  # Filesystem destruction
   - command: rm
     args: ["-rf", "/*"]
   - command: rm
     args: ["-rf", "/"]
   - command: rm
     args: ["-rf", "~"]
-  # Formatting & raw disk writes
   - command: mkfs*
     args: ["*"]
   - command: dd
     args: ["*"]
-  # Shutdown & lockout
   - command: shutdown
     args: ["*"]
   - command: reboot
     args: ["*"]
-  # Password tampering
   - command: passwd
     args: ["*"]
   - command: cat
     args: ["/etc/shadow"]
 ```
 
-### 2. `pipeline.yaml` — CI/CD Action Templates
-Eliminates arbitrary command execution entirely for automated pipelines. Tokens with this policy can only execute predefined, parameterized action workflows:
+### Action Templates (`pipeline.yaml`)
+For CI/CD pipelines and fixed automation, arbitrary binary execution can be disabled entirely in favor of named multi-step actions:
 
 ```yaml
 name: pipeline
-description: "CI/CD and automation pipeline policy — named action templates only"
+description: "Automation pipeline policy restricted to predefined actions"
 guardrails: true
 allow: []
 actions:
   deploy:
-    description: "Pull latest git changes and restart service"
+    description: "Pull updates and reload application services"
     steps:
-      - "/usr/bin/git -C /var/www/site pull --ff-only"
-      - "/usr/bin/systemctl reload nginx"
-    stop_on_failure: true
-  test:
-    description: "Run automated health test"
-    steps:
-      - "/usr/bin/curl -f http://127.0.0.1:7991/health"
+      - "/usr/bin/git -C /srv/app pull --ff-only"
+      - "/usr/bin/systemctl reload app.service"
     stop_on_failure: true
 ```
 
-### 3. `read-only.yaml` — Diagnostics Only
-Permits non-modifying diagnostic inspection (`uptime`, `df`, `free`, `ps`, `systemctl status`, `journalctl`, `ss`).
+Tokens restricted to actions can only invoke predefined steps:
+
+```bash
+curl -X POST https://127.0.0.1:7991/v1/action/deploy \
+  -H "Authorization: Bearer ag_..." \
+  -H "Content-Type: application/json" \
+  -d '{"params": {}}'
+```
 
 ---
 
-## 🔒 Security Architecture & Hardening
+## AI Agent Integration
 
-### 1. Security Tiers & OS User Isolation
-To eliminate single-string root risk, tokens can be bound to isolated system users and security tiers:
+### Model Context Protocol (MCP)
 
-```bash
-# Create an agent token with dedicated system user 'ag-coder' and 'read' tier:
-agentgate token create --name coder --tier read
+AgentGate includes a native Model Context Protocol server, allowing direct integration with MCP-compliant AI tools.
 
-# Create an ops token with narrow sudoers grants:
-agentgate token create --name webops --tier ops
-
-# Create an admin token with mandatory short-lived expiry (max 24h):
-agentgate token create --name deployer --tier admin --expires 8h
-```
-
-- **`read` tier:** Defaults to `read-only` policy, dedicated OS user `ag-<name>`, zero sudo privileges.
-- **`ops` tier:** Dedicated OS user with minimal `/etc/sudoers.d/agentgate-<name>` entry generated specifically for needed commands. Validated with `visudo -cf` before installation.
-- **`admin` tier:** Short-lived tokens only (strictly limited to $\le$ 24 hours).
-
-### 2. Narrow Sudoers Generator & GTFOBins Protection
-When generating sudoers entries, AgentGate enforces hard security constraints:
-- **No GTFOBins:** Binaries with known shell escapes (`vim`, `nano`, `less`, `python3`, `bash`, `find`, `env`, `git`) are strictly rejected.
-- **No Wildcards:** Grants must specify fully-qualified absolute paths and exact arguments (e.g. `/usr/bin/systemctl restart nginx`, NOT `/usr/bin/systemctl *`).
-- **Syntax Verification:** All generated files are verified with `visudo -cf` in a temporary directory prior to atomic installation to `/etc/sudoers.d/`.
-
-### 3. Direct POSIX Execution (No Shell Parser)
-Commands are parsed by `ParsedCommand` and passed as argument arrays directly to `std::process::Command` / `tokio::process::Command`.
-- Disallowed metacharacters: `;`, `&`, `|`, `` ` ``, `$`, `(`, `)`, `>`, `<`, `\n`, `\r`.
-- Shell injection is stopped at the door because no shell parser ever interprets the command string.
-
----
-
-## 💻 Client & AI Agent Usage
-
-### CLI Execution
-Once logged in via `agentgate login --token <TOKEN>`, commands can be run directly:
-
-```bash
-# Diagnostic inspection
-agentgate exec uptime
-agentgate exec df -h
-agentgate exec free -m
-
-# JSON mode (structured machine output for LLM parsing)
-agentgate exec --json systemctl status nginx
-```
-
-### Model Context Protocol (MCP) Server
-Connect Claude Desktop, Cursor, or any MCP-compatible agent directly to AgentGate:
+Start the MCP server:
 
 ```bash
 agentgate mcp
 ```
 
-Add to your `claude_desktop_config.json`:
+Add the server to your agent configuration (e.g., `claude_desktop_config.json`):
+
 ```json
 {
   "mcpServers": {
@@ -271,43 +252,60 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
----
+The agent will be able to discover allowed commands and execute them within the bounds of its configured token.
 
-## 📜 Command Reference
+### CLI Client Execution
 
-### Client CLI (`agentgate`)
-| Command | Description |
-| :--- | :--- |
-| `agentgate` | Launch interactive TUI manager |
-| `agentgate start` | Start server in background (like `tailscale up`) |
-| `agentgate stop` | Stop background server (like `tailscale down`) |
-| `agentgate status` | View server status, network addresses, and active policies |
-| `agentgate exec <cmd>` | Execute a command through the gateway |
-| `agentgate action <name>` | Execute a named multi-step action template |
-| `agentgate token create` | Create a token (`--tier`, `--user-mode`, `--actions`, `--expires`) |
-| `agentgate token list` | List all tokens, tiers, OS users, and expiration dates |
-| `agentgate token revoke` | Instantly revoke a token and clean up OS users/sudoers |
-| `agentgate policy list` | Inspect loaded execution policies |
-| `agentgate logs` | View recent command audit logs |
-| `agentgate update` | Update AgentGate to the latest release |
-| `agentgate mcp` | Start Model Context Protocol server |
+Automation scripts and operators can dispatch commands directly:
 
-### Host Daemon (`agentgated`)
-| Command | Description |
-| :--- | :--- |
-| `agentgated` | Start the foreground HTTP/socket execution server |
-| `agentgated totp setup` | Display or generate RFC 6238 TOTP 2FA secret |
-| `agentgated totp setup --reset` | Reset and reconfigure TOTP 2FA secret |
-| `agentgated totp status` | Check if TOTP 2FA is currently active |
+```bash
+# Standard output
+agentgate exec uptime
+
+# Machine-readable JSON output (includes stdout, stderr, exit code, duration)
+agentgate exec --json systemctl status nginx
+```
 
 ---
 
-## Security Policy
+## Command Reference
 
-For vulnerability reports and coordinated disclosure procedures, please see [SECURITY.md](file:///var/home/scorpion/agentgate/SECURITY.md).
+### `agentgate` (Client & Management CLI)
+
+| Subcommand | Description |
+| :--- | :--- |
+| `agentgate` | Launch interactive terminal management interface |
+| `agentgate exec <cmd>` | Execute a command through the daemon API |
+| `agentgate action <name>` | Execute a predefined named action template |
+| `agentgate start` | Start the daemon as a managed background process |
+| `agentgate stop` | Terminate the background daemon process |
+| `agentgate status` | Inspect daemon health, network bindings, and active policies |
+| `agentgate token create` | Issue a scoped token (`--tier`, `--user-mode`, `--actions`, `--expires`) |
+| `agentgate token list` | Display active tokens, associated policies, and expiration dates |
+| `agentgate token revoke` | Revoke a token and clean up any associated sudoers entries |
+| `agentgate policy list` | List available policy files |
+| `agentgate logs` | Inspect recent command audit records |
+| `agentgate mcp` | Run the Model Context Protocol stdio server |
+
+### `agentgated` (Host Daemon)
+
+| Subcommand / Option | Description |
+| :--- | :--- |
+| `agentgated` | Run the daemon process in foreground |
+| `--listen <addr>` | Specify interface and port binding (default: `127.0.0.1:7991`) |
+| `--config <path>` | Path to custom configuration file |
+| `agentgated totp setup` | Generate or display the RFC 6238 TOTP 2FA secret |
+| `agentgated totp setup --reset` | Overwrite and generate a new TOTP 2FA secret |
+| `agentgated totp status` | Check if TOTP authentication is active |
+
+---
+
+## Security Reporting
+
+To report security vulnerabilities, please refer to the reporting guidelines in [SECURITY.md](file:///var/home/scorpion/agentgate/SECURITY.md).
 
 ---
 
 ## License
 
-MIT © [Lawrence Mwangi](https://github.com/lawrencemwangi496-design)
+MIT License. See [LICENSE](file:///var/home/scorpion/agentgate/LICENSE) for details.
