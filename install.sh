@@ -109,16 +109,24 @@ else
     echo "⚠️  Notice: Official SHA256SUMS file not published for this release tag. Skipping hash verification."
 fi
 
-echo "📦 Installing binary to ${INSTALL_DIR}/agentgate..."
+echo "📦 Installing binaries to ${INSTALL_DIR}..."
 tar -xzf "${TMP_DIR}/${TAR_NAME}" -C "$TMP_DIR"
 
 if [ -w "$INSTALL_DIR" ]; then
     mv "${TMP_DIR}/agentgate" "${INSTALL_DIR}/agentgate"
     chmod +x "${INSTALL_DIR}/agentgate"
+    if [ -f "${TMP_DIR}/agentgated" ]; then
+        mv "${TMP_DIR}/agentgated" "${INSTALL_DIR}/agentgated"
+        chmod +x "${INSTALL_DIR}/agentgated"
+    fi
 else
     echo "🔒 System install location detected (${INSTALL_DIR}). Elevating with sudo..."
     sudo mv "${TMP_DIR}/agentgate" "${INSTALL_DIR}/agentgate"
     sudo chmod +x "${INSTALL_DIR}/agentgate"
+    if [ -f "${TMP_DIR}/agentgated" ]; then
+        sudo mv "${TMP_DIR}/agentgated" "${INSTALL_DIR}/agentgated"
+        sudo chmod +x "${INSTALL_DIR}/agentgated"
+    fi
 fi
 
 rm -rf "$TMP_DIR"

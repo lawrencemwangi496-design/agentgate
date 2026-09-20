@@ -30,8 +30,9 @@ jobs:
         run: |
           mkdir -p dist
           cp target/release/agentgate dist/
+          cp target/release/agentgated dist/
           cd dist
-          tar -czvf agentgate-linux-x86_64.tar.gz agentgate
+          tar -czvf agentgate-linux-x86_64.tar.gz agentgate agentgated
           sha256sum agentgate-linux-x86_64.tar.gz > SHA256SUMS
           cat SHA256SUMS
 

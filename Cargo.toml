@@ -1,6 +1,6 @@
 [package]
 name = "agentgate"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 description = "Secure bridge that lets AI agents execute commands on your machine without your password"
 license = "MIT"
