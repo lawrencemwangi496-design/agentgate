@@ -15,9 +15,37 @@ pub struct AgentGateConfig {
     pub certs_dir: PathBuf,
     pub logs_dir: PathBuf,
     pub pid_file: PathBuf,
+    pub socket_path: PathBuf,
     pub listen_addr: String,
     pub listen_port: u16,
     pub allowed_origins: Vec<String>,
+    pub dashboard: Option<DashboardConfig>,
+    pub totp_file: PathBuf,
+}
+
+const fn default_session_expiry_hours() -> u64 {
+    24
+}
+
+const fn default_totp_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardConfig {
+    #[serde(default = "default_session_expiry_hours")]
+    pub session_expiry_hours: u64,
+    #[serde(default = "default_totp_enabled")]
+    pub totp_enabled: bool,
+}
+
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        Self {
+            session_expiry_hours: default_session_expiry_hours(),
+            totp_enabled: default_totp_enabled(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -28,6 +56,8 @@ struct DaemonConfigFile {
     pub port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_origins: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dashboard: Option<DashboardConfig>,
 }
 
 impl AgentGateConfig {
@@ -40,6 +70,7 @@ impl AgentGateConfig {
         let mut listen_addr = "127.0.0.1".to_string();
         let mut listen_port = 7991u16;
         let mut allowed_origins = Vec::new();
+        let mut dashboard: Option<DashboardConfig> = None;
 
         // 1. Read from config.yaml if present
         if let Ok(Some(parsed)) = fs::read_to_string(&config_file)
@@ -53,6 +84,9 @@ impl AgentGateConfig {
             }
             if let Some(origins) = parsed.allowed_origins {
                 allowed_origins = origins;
+            }
+            if let Some(dash) = parsed.dashboard {
+                dashboard = Some(dash);
             }
         }
 
@@ -82,18 +116,31 @@ impl AgentGateConfig {
                 .collect();
         }
 
+        let socket_path = if let Ok(s) = std::env::var("AGENTGATE_SOCKET") {
+            PathBuf::from(s)
+        } else if Self::is_root() {
+            PathBuf::from("/run/agentgate.sock")
+        } else {
+            config_dir.join("agentgated.sock")
+        };
+
+        let totp_file = config_dir.join("totp.yaml");
+
         let config = Self {
             policies_dir: config_dir.join("policies"),
             tokens_file: config_dir.join("tokens.yaml"),
             certs_dir: config_dir.join("certs"),
             logs_dir: config_dir.join("logs"),
             pid_file: config_dir.join("agentgate.pid"),
+            socket_path,
             config_file,
             client_file,
             config_dir,
             listen_addr,
             listen_port,
             allowed_origins,
+            dashboard,
+            totp_file,
         };
 
         // Create directories if needed
@@ -186,6 +233,25 @@ impl AgentGateConfig {
             let home = dirs::home_dir().context("Could not find home directory")?;
             Ok(home.join(".config").join("agentgate"))
         }
+    }
+
+    /// Get default socket path for client connection
+    pub fn default_socket_path() -> PathBuf {
+        if let Ok(s) = std::env::var("AGENTGATE_SOCKET") {
+            return PathBuf::from(s);
+        }
+        if Self::is_root() {
+            PathBuf::from("/run/agentgate.sock")
+        } else if let Some(home) = dirs::home_dir() {
+            home.join(".config").join("agentgate").join("agentgated.sock")
+        } else {
+            PathBuf::from("/tmp/agentgated.sock")
+        }
+    }
+
+    /// Check if current process or config is running with root permissions
+    pub fn is_running_as_root() -> bool {
+        Self::is_root()
     }
 
     /// Check if the process is running as root (euid == 0) safely without unsafe code

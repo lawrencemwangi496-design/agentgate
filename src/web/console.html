@@ -3,573 +3,1852 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AgentGate Console</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚪</text></svg>">
+  <title>AgentGate - Host Control Plane</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
   <style>
     :root {
-      --bg: #0b0f19;
-      --card: #151d30;
-      --card-border: #22304d;
-      --input-bg: #0c1220;
-      --text: #f1f5f9;
-      --text-muted: #94a3b8;
-      --primary: #38bdf8;
-      --primary-hover: #0ea5e9;
-      --success: #10b981;
-      --warning: #f59e0b;
-      --danger: #ef4444;
-      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --bg-canvas: #0d1117;
+      --bg-surface: #161b22;
+      --bg-overlay: #21262d;
+      --border-default: #30363d;
+      --border-muted: #21262d;
+      --text-primary: #c9d1d9;
+      --text-secondary: #8b949e;
+      --text-muted: #6e7681;
+      --text-white: #f0f6fc;
+      --color-blue: #58a6ff;
+      --color-green: #3fb950;
+      --color-red: #f85149;
+      --color-amber: #d29922;
+      --color-purple: #bc8cff;
+      --mono-font: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      --sans-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      background-color: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-canvas);
+      color: var(--text-primary);
+      font-family: var(--sans-font);
+      font-size: 13px;
+      line-height: 1.5;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
-      line-height: 1.5;
     }
 
+    /* Header */
     header {
-      border-bottom: 1px solid var(--card-border);
-      background: rgba(21, 29, 48, 0.8);
-      backdrop-filter: blur(10px);
-      padding: 1rem 1.5rem;
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border-default);
+      padding: 0.75rem 1.5rem;
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      position: sticky;
-      top: 0;
-      z-index: 10;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
     }
 
     .brand {
       display: flex;
       align-items: center;
       gap: 0.75rem;
-      font-size: 1.25rem;
-      font-weight: 700;
-      letter-spacing: -0.025em;
     }
 
-    .brand span.badge {
-      font-size: 0.75rem;
-      font-weight: 500;
-      background: rgba(56, 189, 248, 0.15);
-      color: var(--primary);
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      padding: 0.2rem 0.6rem;
-      border-radius: 9999px;
-    }
-
-    .status-badge {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.875rem;
-      font-weight: 500;
-      padding: 0.35rem 0.85rem;
-      border-radius: 9999px;
-      background: #1e293b;
-      border: 1px solid var(--card-border);
-    }
-
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--warning);
-    }
-
-    .status-dot.online { background: var(--success); box-shadow: 0 0 10px var(--success); }
-    .status-dot.offline { background: var(--danger); box-shadow: 0 0 10px var(--danger); }
-
-    main {
-      max-width: 1050px;
-      margin: 2rem auto;
-      padding: 0 1.5rem;
-      width: 100%;
-      display: flex;
-      flex-direction: column;
-      gap: 1.5rem;
-      flex: 1;
-    }
-
-    .card {
-      background: var(--card);
-      border: 1px solid var(--card-border);
-      border-radius: 12px;
-      padding: 1.5rem;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
-    }
-
-    .card-title {
+    .brand-title {
       font-size: 1.1rem;
       font-weight: 600;
-      margin-bottom: 1rem;
+      color: var(--text-white);
+      letter-spacing: -0.01em;
+    }
+
+    .badge {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+    }
+
+    .badge-slate { background: var(--bg-overlay); border-color: var(--border-default); color: var(--text-secondary); }
+    .badge-green { background: rgba(63, 185, 80, 0.15); border-color: rgba(63, 185, 80, 0.4); color: var(--color-green); }
+    .badge-red { background: rgba(248, 81, 73, 0.15); border-color: rgba(248, 81, 73, 0.4); color: var(--color-red); }
+    .badge-amber { background: rgba(210, 153, 34, 0.15); border-color: rgba(210, 153, 34, 0.4); color: var(--color-amber); }
+    .badge-blue { background: rgba(88, 166, 255, 0.15); border-color: rgba(88, 166, 255, 0.4); color: var(--color-blue); }
+
+    .header-metrics {
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+    }
+
+    .metric-item {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+    .metric-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      letter-spacing: 0.05em;
+    }
+    .metric-val {
+      font-family: var(--mono-font);
+      font-size: 12px;
+      color: var(--text-white);
+      font-weight: 600;
+    }
+
+    /* Sub-bar: Connection & Actions */
+    .top-toolbar {
+      background-color: #11151c;
+      border-bottom: 1px solid var(--border-muted);
+      padding: 0.5rem 1.5rem;
       display: flex;
       align-items: center;
       justify-content: space-between;
-    }
-
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-      margin-bottom: 1rem;
-    }
-
-    .form-row {
-      display: flex;
       gap: 1rem;
       flex-wrap: wrap;
     }
 
-    .form-row > * {
+    .conn-inputs {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
       flex: 1;
-      min-width: 260px;
+      max-width: 650px;
     }
 
-    label {
-      font-size: 0.85rem;
-      font-weight: 500;
-      color: var(--text-muted);
-    }
-
-    input, select {
-      background: var(--input-bg);
-      border: 1px solid var(--card-border);
-      color: var(--text);
-      padding: 0.75rem 1rem;
-      border-radius: 8px;
-      font-size: 0.95rem;
+    .conn-inputs input {
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      color: var(--text-white);
+      font-family: var(--mono-font);
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 4px;
       outline: none;
-      transition: border-color 0.2s;
     }
-
-    input:focus {
-      border-color: var(--primary);
+    .conn-inputs input:focus {
+      border-color: var(--color-blue);
     }
-
-    input.mono {
-      font-family: var(--font-mono);
-    }
+    .conn-inputs input.host-input { flex: 2; }
+    .conn-inputs input.token-input { flex: 2; }
 
     .btn {
-      background: var(--primary);
-      color: #04101e;
-      border: none;
-      padding: 0.75rem 1.25rem;
-      border-radius: 8px;
-      font-size: 0.95rem;
-      font-weight: 600;
+      font-family: var(--sans-font);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 12px;
+      border-radius: 4px;
+      border: 1px solid var(--border-default);
+      background-color: var(--bg-overlay);
+      color: var(--text-white);
       cursor: pointer;
       display: inline-flex;
       align-items: center;
-      justify-content: center;
-      gap: 0.5rem;
-      transition: background 0.2s, opacity 0.2s;
-    }
-
-    .btn:hover { background: var(--primary-hover); }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    .btn-secondary {
-      background: #1e293b;
-      color: var(--text);
-      border: 1px solid var(--card-border);
-    }
-    .btn-secondary:hover { background: #334155; }
-
-    .quick-chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      margin-top: 0.5rem;
-    }
-
-    .chip {
-      background: #1e293b;
-      border: 1px solid var(--card-border);
-      padding: 0.35rem 0.75rem;
-      border-radius: 6px;
-      font-size: 0.8rem;
-      font-family: var(--font-mono);
-      color: var(--primary);
-      cursor: pointer;
-      user-select: none;
-      transition: background 0.15s;
-    }
-
-    .chip:hover {
-      background: #334155;
-    }
-
-    /* Terminal Output Window */
-    .terminal-window {
-      background: #070b13;
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      overflow: hidden;
-      margin-top: 1rem;
-    }
-
-    .terminal-header {
-      background: #111726;
-      border-bottom: 1px solid var(--card-border);
-      padding: 0.6rem 1rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
-
-    .window-dots {
-      display: flex;
       gap: 6px;
+      transition: background 0.15s ease, border-color 0.15s ease;
+      white-space: nowrap;
+    }
+    .btn:hover {
+      background-color: #30363d;
+      border-color: #8b949e;
+    }
+    .btn:active {
+      transform: translateY(1px);
+    }
+    .btn-danger {
+      background-color: #211517;
+      border-color: var(--color-red);
+      color: var(--color-red);
+    }
+    .btn-danger:hover {
+      background-color: var(--color-red);
+      color: #fff;
+    }
+    .btn-warning {
+      background-color: #261d11;
+      border-color: var(--color-amber);
+      color: var(--color-amber);
+    }
+    .btn-warning:hover {
+      background-color: var(--color-amber);
+      color: #111;
+    }
+    .btn-primary {
+      background-color: #1f3b60;
+      border-color: var(--color-blue);
+      color: var(--color-blue);
+    }
+    .btn-primary:hover {
+      background-color: var(--color-blue);
+      color: #0d1117;
+    }
+    .btn-success {
+      background-color: #15271a;
+      border-color: var(--color-green);
+      color: var(--color-green);
+    }
+    .btn-success:hover {
+      background-color: var(--color-green);
+      color: #0d1117;
+    }
+    .btn-sm {
+      padding: 2px 8px;
+      font-size: 11px;
     }
 
-    .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-    }
-    .dot.red { background: #ef4444; }
-    .dot.yellow { background: #f59e0b; }
-    .dot.green { background: #10b981; }
-
-    .meta-tags {
+    .top-actions {
       display: flex;
-      gap: 0.75rem;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    /* Main layout */
+    .container {
+      flex: 1;
+      padding: 1rem 1.5rem;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    /* Tabs */
+    .tab-bar {
+      display: flex;
+      border-bottom: 1px solid var(--border-default);
+      gap: 0.5rem;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      color: var(--text-white);
+      border-bottom-color: var(--color-blue);
+    }
+    .tab-btn:hover:not(.active) {
+      color: var(--text-primary);
+    }
+
+    /* Panels */
+    .tab-content {
+      display: none;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .tab-content.active {
+      display: flex;
+    }
+
+    /* Panels / Cards */
+    .card {
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .card-header {
+      padding: 0.6rem 1rem;
+      background-color: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--border-default);
+      display: flex;
+      justify-content: space-between;
       align-items: center;
     }
-
-    .tag {
-      font-size: 0.75rem;
-      font-family: var(--font-mono);
-      padding: 0.15rem 0.5rem;
-      border-radius: 4px;
+    .card-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
     }
-    .tag.success { background: rgba(16, 185, 129, 0.2); color: #34d399; }
-    .tag.danger { background: rgba(239, 68, 68, 0.2); color: #f87171; }
-    .tag.info { background: rgba(56, 189, 248, 0.2); color: #38bdf8; }
+    .card-body {
+      padding: 1rem;
+    }
 
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th {
+      text-align: left;
+      padding: 6px 10px;
+      background: var(--bg-overlay);
+      color: var(--text-secondary);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border-default);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border-muted);
+      vertical-align: middle;
+    }
+    tr:hover td {
+      background-color: rgba(255, 255, 255, 0.02);
+    }
+    .code {
+      font-family: var(--mono-font);
+      background: rgba(110, 118, 129, 0.1);
+      padding: 2px 5px;
+      border-radius: 3px;
+    }
+
+    /* Terminal / Log Stream */
+    .terminal-container {
+      background-color: #080c11;
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      font-family: var(--mono-font);
+      font-size: 11px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .terminal-header {
+      background-color: #121820;
+      padding: 6px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border-default);
+    }
     .terminal-body {
-      padding: 1.25rem;
-      min-height: 160px;
-      max-height: 480px;
+      padding: 8px 12px;
+      height: 380px;
       overflow-y: auto;
-      font-family: var(--font-mono);
-      font-size: 0.9rem;
-      white-space: pre-wrap;
-      word-break: break-all;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .log-line {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      padding: 2px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    }
+    .log-time { color: var(--text-muted); flex-shrink: 0; }
+    .log-tag { flex-shrink: 0; font-weight: 600; }
+    .log-msg { color: var(--text-primary); word-break: break-all; }
+
+    /* Forms */
+    .form-group {
+      margin-bottom: 0.75rem;
+    }
+    .form-label {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+    }
+    .form-control {
+      width: 100%;
+      background: var(--bg-overlay);
+      border: 1px solid var(--border-default);
+      color: var(--text-white);
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-family: var(--mono-font);
+      font-size: 12px;
+      outline: none;
+    }
+    .form-control:focus {
+      border-color: var(--color-blue);
+    }
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
     }
 
-    .stdout { color: #f8fafc; }
-    .stderr { color: #f87171; margin-top: 0.5rem; }
-    .empty-state { color: #475569; text-align: center; padding: 2.5rem 0; }
-
-    .code-box {
-      background: var(--input-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 0.75rem 1rem;
-      font-family: var(--font-mono);
-      font-size: 0.85rem;
-      color: #cbd5e1;
-      overflow-x: auto;
-      white-space: pre;
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
     }
-
-    footer {
-      border-top: 1px solid var(--card-border);
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      width: 100%;
+      max-width: 480px;
       padding: 1.5rem;
-      text-align: center;
-      font-size: 0.85rem;
-      color: var(--text-muted);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     }
+    .modal h3 {
+      font-size: 14px;
+      color: var(--text-white);
+      margin-bottom: 0.75rem;
+    }
+    .modal p {
+      color: var(--text-secondary);
+      font-size: 12px;
+      margin-bottom: 1.25rem;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+
+    /* Toast */
+    #toast-container {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .toast {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      color: var(--text-white);
+      padding: 8px 14px;
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      font-size: 12px;
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body>
 
+  <!-- Top Header -->
   <header>
     <div class="brand">
-      <span>🚪 AgentGate</span>
-      <span class="badge">Web Console</span>
+      <span style="font-size: 18px;">🛡️</span>
+      <span class="brand-title">AgentGate</span>
+      <span class="badge badge-slate" id="versionBadge">v0.1.8</span>
+      <span class="badge badge-slate">DAEMON CONTROL PLANE</span>
+      <span class="badge badge-green" id="systemStateBadge">INITIALIZING</span>
     </div>
-    <div class="status-badge">
-      <div id="statusDot" class="status-dot"></div>
-      <span id="statusText">Checking server...</span>
+    <div class="header-metrics">
+      <div class="metric-item">
+        <span class="metric-label">Uptime</span>
+        <span class="metric-val" id="metricUptime">--:--:--</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Active Procs</span>
+        <span class="metric-val" id="metricActiveProcs">0</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Policies</span>
+        <span class="metric-val" id="metricPolicies">0</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Tokens</span>
+        <span class="metric-val" id="metricTokens">0</span>
+      </div>
+      <div class="metric-item" style="align-items: center; justify-content: center; margin-left: 0.5rem; gap: 4px;">
+        <span class="badge badge-blue" id="userEmailBadge" style="display:none; font-size:11px; text-transform:none;"></span>
+        <button class="btn btn-sm btn-primary" id="loginTriggerBtn" onclick="openLoginModal()">Sign In</button>
+        <button class="btn btn-sm" id="logoutBtn" style="display:none;" onclick="performLogout()">Sign Out</button>
+      </div>
     </div>
   </header>
 
-  <main>
-    <!-- Authentication Config -->
-    <div class="card">
-      <div class="card-title">
-        <span>🔑 Authentication & Server</span>
-        <button id="clearTokenBtn" class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Clear Token</button>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label for="serverUrl">AgentGate Server URL</label>
-          <input type="text" id="serverUrl" class="mono" value="">
-        </div>
-        <div class="form-group">
-          <label for="authToken">Agent Bearer Token (starts with ag_)</label>
-          <input type="password" id="authToken" class="mono" placeholder="ag_9a8b7c6d5e4f...">
-        </div>
-      </div>
+  <!-- Connection & Action Bar -->
+  <div class="top-toolbar">
+    <div class="conn-inputs">
+      <input type="text" id="hostUrl" class="host-input" placeholder="Host URL (e.g. https://127.0.0.1:7991)">
+      <input type="password" id="adminToken" class="token-input" placeholder="Admin Bearer Token (ag_... or dash_...)">
+      <button class="btn btn-primary" onclick="connectHost()">Connect</button>
+    </div>
+    <div class="top-actions">
+      <button id="restartBtn" class="btn btn-slate" onclick="triggerRestartDaemon()">
+        <span>🔄</span><span>Restart Daemon</span>
+      </button>
+      <button id="lockdownBtn" class="btn btn-warning" onclick="toggleLockdown()">
+        <span>🔒</span><span id="lockdownBtnText">Lockdown System</span>
+      </button>
+      <button class="btn btn-danger" onclick="confirmShutdown()">
+        <span>🛑</span><span>Shutdown Daemon</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Main Body -->
+  <div class="container">
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab('telemetry', this)">Live Operations</button>
+      <button class="tab-btn" onclick="switchTab('tokens', this)">Tokens</button>
+      <button class="tab-btn" onclick="switchTab('policies', this)">Security Policies</button>
+      <button class="tab-btn" onclick="switchTab('files', this)">File Manager</button>
+      <button class="tab-btn" onclick="switchTab('console', this)">Command Console</button>
     </div>
 
-    <!-- Command Execution Playground -->
-    <div class="card">
-      <div class="card-title">
-        <span>⚡ Command Execution Playground</span>
-        <span style="font-size: 0.8rem; font-weight: 400; color: var(--text-muted);">Scoped by Token Policy</span>
-      </div>
-
-      <div class="form-group">
-        <label for="commandInput">Command</label>
-        <div style="display: flex; gap: 0.75rem;">
-          <input type="text" id="commandInput" class="mono" placeholder="e.g. uptime" style="flex: 1;">
-          <button id="runBtn" class="btn">▶ Run</button>
+    <!-- TAB 1: Live Operations -->
+    <div id="tab-telemetry" class="tab-content active">
+      <!-- Active Processes Card -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>⚡</span> Active Running Executions
+          </div>
+          <button class="btn btn-sm" onclick="fetchActiveExecutions()">Refresh</button>
+        </div>
+        <div class="card-body" style="padding: 0;">
+          <table id="executionsTable">
+            <thead>
+              <tr>
+                <th>Execution ID</th>
+                <th>PID</th>
+                <th>Token</th>
+                <th>Client</th>
+                <th>Command</th>
+                <th>Started</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="executionsBody">
+              <tr>
+                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                  No active processes currently running on host.
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
-      <div>
-        <label>Quick Diagnostics:</label>
-        <div class="quick-chips">
-          <div class="chip" data-cmd="uptime">uptime</div>
-          <div class="chip" data-cmd="df -h">df -h</div>
-          <div class="chip" data-cmd="free -m">free -m</div>
-          <div class="chip" data-cmd="uname -a">uname -a</div>
-          <div class="chip" data-cmd="whoami">whoami</div>
-          <div class="chip" data-cmd="cat /etc/os-release">cat /etc/os-release</div>
-          <div class="chip" data-cmd="systemctl status nginx">systemctl status nginx</div>
-          <div class="chip" data-cmd="docker ps">docker ps</div>
-          <div class="chip" data-cmd="uptime; id" style="color: var(--danger);" title="Test injection blocking">⚠️ uptime; id</div>
-        </div>
-      </div>
-
-      <!-- Output Display -->
-      <div class="terminal-window">
+      <!-- Real-Time Audit / Telemetry Stream -->
+      <div class="terminal-container">
         <div class="terminal-header">
-          <div class="window-dots">
-            <div class="dot red"></div>
-            <div class="dot yellow"></div>
-            <div class="dot green"></div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span id="sseIndicator" class="badge badge-slate">SSE Disconnected</span>
+            <span style="color: var(--text-secondary); font-size: 11px;">Real-Time Audit Event Stream</span>
           </div>
-          <div class="meta-tags">
-            <span id="exitCodeTag" class="tag info" style="display: none;">EXIT: 0</span>
-            <span id="durationTag" class="tag info" style="display: none;">0ms</span>
+          <div style="display: flex; gap: 6px;">
+            <select id="logFilter" class="form-control" style="width: auto; padding: 2px 6px; font-size: 11px;">
+              <option value="all">Filter: All Events</option>
+              <option value="allowed">Allowed Only</option>
+              <option value="denied">Denied Only</option>
+              <option value="blocked">Blocked Only</option>
+            </select>
+            <button class="btn btn-sm" id="autoscrollBtn" onclick="toggleAutoScroll()">Auto-scroll: ON</button>
+            <button class="btn btn-sm" onclick="clearLogs()">Clear</button>
           </div>
         </div>
-        <div id="terminalBody" class="terminal-body">
-          <div class="empty-state">No command executed yet. Select a command or type above and click Run.</div>
+        <div class="terminal-body" id="logStream">
+          <div class="log-line" style="color: var(--text-muted);">
+            Connecting to host telemetry stream...
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- CLI & API Equivalent Reference -->
-    <div class="card">
-      <div class="card-title">
-        <span>💻 AI Agent Equivalent Commands</span>
+    <!-- TAB 2: Tokens -->
+    <div id="tab-tokens" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Issue New Access Token</div>
+        </div>
+        <div class="card-body">
+          <form id="createTokenForm" onsubmit="handleCreateToken(event)">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Token Name / Client ID</label>
+                <input type="text" id="newTokenName" class="form-control" placeholder="e.g. claude-code-prod" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Assigned Policy</label>
+                <select id="newTokenPolicy" class="form-control" required></select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Expiry</label>
+                <select id="newTokenExpiry" class="form-control">
+                  <option value="0">Never Expires</option>
+                  <option value="1">1 Day</option>
+                  <option value="7">7 Days</option>
+                  <option value="30" selected>30 Days</option>
+                  <option value="90">90 Days</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">OS User (optional, root-only)</label>
+                <input type="text" id="newTokenOsUser" class="form-control" placeholder="e.g. deploy / dev">
+              </div>
+            </div>
+            <div style="margin-top: 0.5rem;">
+              <button type="submit" class="btn btn-success">Generate Token</button>
+            </div>
+          </form>
+        </div>
       </div>
-      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">
-        Your AI agent can run this command directly using our lightweight CLI or standard HTTPS cURL:
-      </p>
-      <div class="form-group">
-        <label>AgentGate Client CLI (Recommended — 4 tokens, no curl overhead):</label>
-        <div id="cliPreview" class="code-box">agentgate exec uptime</div>
-      </div>
-      <div class="form-group">
-        <label>Raw cURL API:</label>
-        <div id="curlPreview" class="code-box">curl -k -X POST https://127.0.0.1:7991/v1/exec ...</div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Active Tokens</div>
+          <button class="btn btn-sm" onclick="loadTokens()">Refresh</button>
+        </div>
+        <div class="card-body" style="padding: 0;">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Policy</th>
+                <th>Target OS User</th>
+                <th>Tier</th>
+                <th>Created</th>
+                <th>Expires</th>
+                <th>Last Used</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="tokensTableBody">
+              <tr><td colspan="8" style="text-align:center; color: var(--text-muted); padding: 1.5rem;">Loading tokens...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
-  </main>
 
-  <footer>
-    <p>AgentGate &bull; Zero Shell Injection &bull; Deny-by-Default Policy Execution</p>
-  </footer>
+    <!-- TAB 3: Policies -->
+    <div id="tab-policies" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Loaded Security Policies</div>
+          <button class="btn btn-sm" onclick="loadPolicies()">Refresh</button>
+        </div>
+        <div class="card-body" id="policiesList">
+          <div style="color: var(--text-muted);">Loading policies...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: Command Console -->
+    <div id="tab-console" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Direct Command Dispatch</div>
+        </div>
+        <div class="card-body">
+          <div class="form-group">
+            <label class="form-label">Execute Command via Host Engine</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="consoleCmdInput" class="form-control" placeholder="e.g. uname -a or uptime">
+              <button class="btn btn-primary" onclick="executeConsoleCmd()">Run</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Working Directory (optional)</label>
+            <input type="text" id="consoleCwdInput" class="form-control" placeholder="e.g. /var/log">
+          </div>
+          <div style="margin-top: 1rem;">
+            <label class="form-label">Execution Result</label>
+            <pre id="consoleOutput" style="background:#080c11; border:1px solid var(--border-default); border-radius:4px; padding:10px; font-family:var(--mono-font); font-size:12px; min-height:160px; max-height:400px; overflow-y:auto; color:var(--text-white); white-space: pre-wrap; word-break: break-all;">Awaiting command...</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: File Manager -->
+    <div id="tab-files" class="tab-content">
+      <div style="display: grid; grid-template-columns: 320px 1fr; gap: 1rem;">
+        <!-- Left: File List -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span>📁</span> Config &amp; Policy Files
+            </div>
+            <div style="display: flex; gap: 4px;">
+              <input type="file" id="localFileInput" accept=".yaml,.yml" onchange="handleLocalFileImport(event)" style="display: none;">
+              <button class="btn btn-sm" onclick="document.getElementById('localFileInput').click()" title="Load policy YAML file from your local computer">📥 Import</button>
+              <button class="btn btn-sm" onclick="loadFiles()">Refresh</button>
+              <button class="btn btn-sm btn-primary" onclick="promptNewFile()">+ New</button>
+            </div>
+          </div>
+          <div class="card-body" style="padding: 0; max-height: 540px; overflow-y: auto;">
+            <div id="filesListContainer" style="padding: 4px;">
+              <div style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                Loading files...
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: File Editor -->
+        <div class="card" style="display: flex; flex-direction: column;">
+          <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
+            <div class="card-title" style="gap: 8px; flex-wrap: wrap;">
+              <span>📝</span>
+              <span id="activeFilePathDisplay" style="color: var(--text-white); font-family: var(--mono-font);">Select a file to edit</span>
+              <span id="activeFileSizeBadge" class="badge badge-slate" style="display: none;"></span>
+              <span id="policyValidationBadge" class="badge badge-slate" style="display: none;"></span>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn btn-sm" id="fileExportBtn" style="display: none;" onclick="exportActiveFile()" title="Download file to your local computer">📤 Export</button>
+              <button class="btn btn-sm btn-danger" id="fileDeleteBtn" style="display: none;" onclick="deleteActiveFile()">Delete</button>
+              <button class="btn btn-sm btn-success" id="fileSaveBtn" style="display: none;" onclick="saveActiveFile()">Save File</button>
+            </div>
+          </div>
+          <div class="card-body" style="padding: 0; flex: 1;">
+            <textarea id="fileEditorArea" oninput="lintPolicyYaml()" spellcheck="false" style="width: 100%; height: 500px; background: #080c11; color: var(--text-white); border: none; font-family: var(--mono-font); font-size: 12px; padding: 12px; line-height: 1.5; resize: vertical; outline: none;" placeholder="Select a configuration or policy file from the list to view or edit..."></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmation Modal (for Shutdown) -->
+  <div class="modal-backdrop" id="shutdownModal">
+    <div class="modal">
+      <h3>⚠️ Confirm Host Daemon Shutdown</h3>
+      <p>This will cleanly terminate the <code>agentgated</code> process on the host. Any connected AI agents or clients will be disconnected until the daemon is restarted via systemd or terminal.</p>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeShutdownModal()">Cancel</button>
+        <button class="btn btn-danger" onclick="performShutdown()">Confirm Shutdown</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmation Modal (for Restart) -->
+  <div class="modal-backdrop" id="restartModal">
+    <div class="modal">
+      <h3>🔄 Confirm Host Daemon Restart</h3>
+      <p>This will cleanly restart the <code>agentgated</code> process on the host. Any newly edited configuration or policy files will take effect immediately.</p>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeRestartModal()">Cancel</button>
+        <button class="btn btn-warning" onclick="performRestart()">Confirm Restart</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Token Display Modal -->
+  <div class="modal-backdrop" id="tokenResultModal">
+    <div class="modal">
+      <h3 style="color: var(--color-green);">✓ Token Generated Successfully</h3>
+      <p>Please copy this token now. For security purposes, it cannot be displayed again.</p>
+      <div style="background: var(--bg-canvas); border: 1px solid var(--border-default); padding: 8px; border-radius: 4px; font-family: var(--mono-font); word-break: break-all; margin-bottom: 1rem;" id="tokenResultBox"></div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" onclick="copyGeneratedToken()">Copy Token</button>
+        <button class="btn" onclick="document.getElementById('tokenResultModal').classList.remove('open')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Authentication / Login Modal -->
+  <div class="modal-backdrop" id="loginModal">
+    <div class="modal" style="max-width: 440px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 20px;">🛡️</span>
+          <h3 style="margin: 0; font-size: 14px; color: var(--text-white);">Host Control Plane Login</h3>
+        </div>
+        <button class="btn btn-sm" onclick="closeLoginModal()">✕</button>
+      </div>
+      
+      <!-- Method Selector Tabs -->
+      <div style="display: flex; border-bottom: 1px solid var(--border-default); margin-bottom: 1rem; gap: 4px;">
+        <button class="tab-btn active" id="authTabTotp" onclick="switchAuthMethod('totp')" style="padding: 4px 10px; font-size: 11px;">Authenticator (TOTP)</button>
+        <button class="tab-btn" id="authTabSetup" onclick="switchAuthMethod('setup')" style="padding: 4px 10px; font-size: 11px;">2FA Setup Wizard</button>
+        <button class="tab-btn" id="authTabToken" onclick="switchAuthMethod('token')" style="padding: 4px 10px; font-size: 11px;">Admin Token</button>
+      </div>
+
+      <!-- TOTP Flow: Code Entry -->
+      <div id="totpStepCode">
+        <p style="color: var(--text-secondary); font-size: 12px; margin-bottom: 1rem;">
+          Enter the 6-digit code from Google Authenticator, 1Password, Aegis, or Bitwarden.
+        </p>
+        <div class="form-group">
+          <label class="form-label">Authenticator 6-Digit Code</label>
+          <input type="text" id="loginTotpInput" class="form-control" placeholder="123456" maxlength="6" style="letter-spacing: 0.3em; font-size: 20px; text-align: center; font-weight: 600;" required autocomplete="one-time-code">
+        </div>
+        <div class="modal-actions" style="margin-top: 1.25rem;">
+          <button class="btn btn-success" id="verifyTotpBtn" onclick="verifyTotpCode()">Verify &amp; Sign In</button>
+        </div>
+        <div style="margin-top: 1rem; text-align: center;">
+          <a href="#" onclick="switchAuthMethod('setup'); return false;" style="color: var(--color-blue); font-size: 11px; text-decoration: none;">First time here? Configure 2FA Key →</a>
+        </div>
+      </div>
+
+      <!-- TOTP Flow: Initial Setup Wizard -->
+      <div id="totpStepSetup" style="display: none;">
+        <p style="color: var(--text-secondary); font-size: 12px; margin-bottom: 0.75rem;">
+          Add this secret key to your Authenticator app (Google Authenticator, 1Password, Aegis).
+        </p>
+        <div style="background: var(--bg-canvas); border: 1px solid var(--border-default); border-radius: 4px; padding: 10px; margin-bottom: 1rem;">
+          <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;">Secret Key (Base32)</div>
+          <div style="font-family: var(--mono-font); font-size: 14px; color: var(--color-blue); font-weight: 600; letter-spacing: 0.1em; word-break: break-all;" id="setupSecretKeyDisplay">Loading...</div>
+          <div style="margin-top: 6px; display: flex; gap: 6px;">
+            <button class="btn btn-sm" onclick="copySetupSecret()">Copy Secret</button>
+            <a id="setupOtpauthLink" href="#" class="btn btn-sm" style="text-decoration: none;" target="_blank">Open in App</a>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Confirm 6-Digit Code</label>
+          <input type="text" id="setupVerifyCodeInput" class="form-control" placeholder="123456" maxlength="6" style="letter-spacing: 0.3em; font-size: 16px; text-align: center; font-weight: 600;" required>
+        </div>
+        <div class="modal-actions" style="margin-top: 1.25rem;">
+          <button class="btn btn-success" id="confirmSetupBtn" onclick="confirmTotpSetup()">Save &amp; Activate 2FA</button>
+        </div>
+      </div>
+
+      <!-- Token Fallback Flow -->
+      <div id="tokenStep" style="display: none;">
+        <p style="color: var(--text-secondary); font-size: 12px; margin-bottom: 1rem;">
+          Authenticate directly with a host token (starts with <code>ag_</code> or <code>dash_</code>).
+        </p>
+        <div class="form-group">
+          <label class="form-label">Access Token</label>
+          <input type="password" id="modalTokenInput" class="form-control" placeholder="ag_...">
+        </div>
+        <div class="modal-actions" style="margin-top: 1.25rem;">
+          <button class="btn btn-primary" onclick="loginWithModalToken()">Sign In with Token</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Toast Notification Center -->
+  <div id="toast-container"></div>
 
   <script>
-    // State initialization
-    const serverInput = document.getElementById('serverUrl');
-    const tokenInput = document.getElementById('authToken');
-    const commandInput = document.getElementById('commandInput');
-    const runBtn = document.getElementById('runBtn');
-    const terminalBody = document.getElementById('terminalBody');
-    const exitCodeTag = document.getElementById('exitCodeTag');
-    const durationTag = document.getElementById('durationTag');
-    const statusDot = document.getElementById('statusDot');
-    const statusText = document.getElementById('statusText');
-    const cliPreview = document.getElementById('cliPreview');
-    const curlPreview = document.getElementById('curlPreview');
-    const clearTokenBtn = document.getElementById('clearTokenBtn');
+    // State
+    let config = {
+      host: window.location.origin === "file://" || !window.location.origin ? "http://127.0.0.1:7991" : window.location.origin,
+      token: localStorage.getItem("agentgate_admin_token") || ""
+    };
+    let sseSource = null;
+    let autoScroll = true;
+    let isLockdown = false;
+    let latestRawToken = "";
 
-    // Default server URL to current origin
-    serverInput.value = window.location.origin || 'https://127.0.0.1:7991';
+    // DOM Elements
+    const hostInput = document.getElementById("hostUrl");
+    const tokenInput = document.getElementById("adminToken");
+    const systemStateBadge = document.getElementById("systemStateBadge");
+    const sseIndicator = document.getElementById("sseIndicator");
+    const metricUptime = document.getElementById("metricUptime");
+    const metricActiveProcs = document.getElementById("metricActiveProcs");
+    const metricPolicies = document.getElementById("metricPolicies");
+    const metricTokens = document.getElementById("metricTokens");
+    const logStream = document.getElementById("logStream");
+    const lockdownBtnText = document.getElementById("lockdownBtnText");
+    const lockdownBtn = document.getElementById("lockdownBtn");
 
-    // Restore saved token
-    const savedToken = localStorage.getItem('agentgate_token');
-    if (savedToken) {
-      tokenInput.value = savedToken;
+    // Init
+    window.addEventListener("DOMContentLoaded", () => {
+      hostInput.value = config.host;
+      tokenInput.value = config.token;
+      connectHost();
+    });
+
+    function showToast(msg, isError = false) {
+      const container = document.getElementById("toast-container");
+      const toast = document.createElement("div");
+      toast.className = "toast";
+      if (isError) toast.style.borderColor = "var(--color-red)";
+      toast.innerText = msg;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
     }
 
-    // Save token on change
-    tokenInput.addEventListener('input', () => {
-      localStorage.setItem('agentgate_token', tokenInput.value.trim());
-      updatePreviews();
-    });
+    function switchTab(tabName, el) {
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+      el.classList.add("active");
+      document.getElementById("tab-" + tabName).classList.add("active");
+      if (tabName === 'tokens') loadTokens();
+      if (tabName === 'policies') loadPolicies();
+      if (tabName === 'files') loadFiles();
+    }
 
-    clearTokenBtn.addEventListener('click', () => {
-      tokenInput.value = '';
-      localStorage.removeItem('agentgate_token');
-      updatePreviews();
-    });
+    function connectHost() {
+      config.host = hostInput.value.replace(/\/$/, "");
+      config.token = tokenInput.value.trim();
+      localStorage.setItem("agentgate_admin_token", config.token);
 
-    // Check health
-    async function checkHealth() {
-      const base = serverInput.value.trim().replace(/\/+$/, '');
+      fetchStatus();
+      fetchActiveExecutions();
+      loadPolicies();
+      checkAuthMe();
+      setupSSE();
+    }
+
+    function getHeaders() {
+      const headers = { "Content-Type": "application/json" };
+      if (config.token) {
+        headers["Authorization"] = "Bearer " + config.token;
+      }
+      return headers;
+    }
+
+    async function fetchStatus() {
       try {
-        const res = await fetch(`${base}/health`, { method: 'GET' });
-        if (res.ok) {
-          const data = await res.json();
-          statusDot.className = 'status-dot online';
-          statusText.textContent = `Online (v${data.version || '0.1.0'})`;
-        } else {
-          statusDot.className = 'status-dot offline';
-          statusText.textContent = `Server Error (${res.status})`;
-        }
+        const res = await fetch(`${config.host}/v1/admin/status`, { headers: getHeaders() });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        
+        isLockdown = data.lockdown;
+        updateStatusDisplay(data);
       } catch (err) {
-        statusDot.className = 'status-dot offline';
-        statusText.textContent = 'Server Offline / Unreachable';
+        systemStateBadge.className = "badge badge-red";
+        systemStateBadge.innerText = "UNREACHABLE";
       }
     }
 
-    // Update previews
-    function updatePreviews() {
-      const cmd = commandInput.value.trim() || 'uptime';
-      const token = tokenInput.value.trim() || 'ag_YOUR_TOKEN';
-      const srv = serverInput.value.trim().replace(/\/+$/, '') || 'https://127.0.0.1:7991';
+    function updateStatusDisplay(data) {
+      if (data.version) {
+        document.getElementById("versionBadge").innerText = "v" + data.version;
+      }
+      if (data.lockdown) {
+        systemStateBadge.className = "badge badge-red";
+        systemStateBadge.innerText = "LOCKED DOWN";
+        lockdownBtn.className = "btn btn-success";
+        lockdownBtnText.innerText = "Release Lockdown";
+      } else {
+        systemStateBadge.className = "badge badge-green";
+        systemStateBadge.innerText = "OPERATIONAL";
+        lockdownBtn.className = "btn btn-warning";
+        lockdownBtnText.innerText = "Lockdown System";
+      }
 
-      cliPreview.textContent = `agentgate exec ${cmd}`;
-      curlPreview.textContent = `curl -k -X POST ${srv}/v1/exec \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"command": "${cmd}"}'`;
+      if (data.uptime_seconds !== undefined) {
+        const h = Math.floor(data.uptime_seconds / 3600).toString().padStart(2, '0');
+        const m = Math.floor((data.uptime_seconds % 3600) / 60).toString().padStart(2, '0');
+        const s = (data.uptime_seconds % 60).toString().padStart(2, '0');
+        metricUptime.innerText = `${h}:${m}:${s}`;
+      }
+
+      if (data.active_executions !== undefined) {
+        metricActiveProcs.innerText = data.active_executions;
+      }
+      if (data.policies_count !== undefined) {
+        metricPolicies.innerText = data.policies_count;
+      }
+      if (data.tokens_count !== undefined) {
+        metricTokens.innerText = data.tokens_count;
+      }
     }
 
-    // Quick chips
-    document.querySelectorAll('.chip').forEach(chip => {
-      chip.addEventListener('click', () => {
-        commandInput.value = chip.getAttribute('data-cmd');
-        updatePreviews();
-        executeCommand();
+    function setupSSE() {
+      if (sseSource) {
+        sseSource.close();
+      }
+      const streamUrl = `${config.host}/v1/admin/stream?token=${encodeURIComponent(config.token)}`;
+      sseSource = new EventSource(streamUrl);
+
+      sseSource.onopen = () => {
+        sseIndicator.className = "badge badge-green";
+        sseIndicator.innerText = "SSE Connected";
+      };
+
+      sseSource.addEventListener("audit", (e) => {
+        try {
+          const entry = JSON.parse(e.data);
+          appendLogEntry(entry);
+        } catch (err) {}
       });
-    });
 
-    commandInput.addEventListener('input', updatePreviews);
-    commandInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        executeCommand();
+      sseSource.addEventListener("heartbeat", (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          isLockdown = data.lockdown;
+          updateStatusDisplay({
+            lockdown: data.lockdown,
+            uptime_seconds: data.uptime_seconds,
+            active_executions: data.active_executions.length
+          });
+          renderExecutions(data.active_executions);
+        } catch (err) {}
+      });
+
+      sseSource.onerror = () => {
+        sseIndicator.className = "badge badge-red";
+        sseIndicator.innerText = "SSE Offline";
+      };
+    }
+
+    function appendLogEntry(entry) {
+      const filter = document.getElementById("logFilter").value;
+      const resType = (entry.result || "").toLowerCase();
+      if (filter === "allowed" && resType !== "allowed") return;
+      if (filter === "denied" && resType !== "denied") return;
+      if (filter === "blocked" && !resType.includes("blocked")) return;
+
+      const line = document.createElement("div");
+      line.className = "log-line";
+
+      const time = new Date(entry.timestamp).toLocaleTimeString();
+      let badgeClass = "badge-slate";
+      if (resType === "allowed") badgeClass = "badge-green";
+      else if (resType.includes("blocked") || resType === "denied") badgeClass = "badge-red";
+      else if (resType === "error") badgeClass = "badge-amber";
+
+      line.innerHTML = `
+        <span class="log-time">${time}</span>
+        <span class="badge ${badgeClass} log-tag">${(entry.result || "").toUpperCase()}</span>
+        <span class="log-msg"><strong style="color:var(--color-blue)">${entry.token_name}</strong>: <span class="code">${escapeHtml(entry.command)}</span> (${entry.duration_ms || 0}ms${entry.exit_code !== undefined && entry.exit_code !== null ? ', exit ' + entry.exit_code : ''})${entry.reason ? ' - ' + escapeHtml(entry.reason) : ''}</span>
+      `;
+
+      logStream.appendChild(line);
+      if (autoScroll) {
+        logStream.scrollTop = logStream.scrollHeight;
       }
-    });
+    }
 
-    // Run command
-    async function executeCommand() {
-      const cmd = commandInput.value.trim();
-      if (!cmd) return;
+    function toggleAutoScroll() {
+      autoScroll = !autoScroll;
+      document.getElementById("autoscrollBtn").innerText = `Auto-scroll: ${autoScroll ? "ON" : "OFF"}`;
+    }
 
-      const token = tokenInput.value.trim();
-      if (!token) {
-        alert('Please enter an AgentGate Bearer token first.');
-        tokenInput.focus();
+    function clearLogs() {
+      logStream.innerHTML = '';
+    }
+
+    async function fetchActiveExecutions() {
+      try {
+        const res = await fetch(`${config.host}/v1/admin/executions`, { headers: getHeaders() });
+        if (res.ok) {
+          const list = await res.json();
+          renderExecutions(list);
+        }
+      } catch (e) {}
+    }
+
+    function renderExecutions(list) {
+      const tbody = document.getElementById("executionsBody");
+      if (!list || list.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No active processes currently running on host.</td></tr>`;
         return;
       }
+      tbody.innerHTML = list.map(item => `
+        <tr>
+          <td class="code">${escapeHtml(item.id.slice(0, 8))}...</td>
+          <td><span class="code" style="color:var(--color-amber);">${item.pid || 'Pending'}</span></td>
+          <td>${escapeHtml(item.token_name)}</td>
+          <td class="code">${escapeHtml(item.client_addr)}</td>
+          <td class="code"><strong>${escapeHtml(item.command)}</strong></td>
+          <td>${new Date(item.started_at).toLocaleTimeString()}</td>
+          <td style="text-align: right;">
+            <button class="btn btn-sm btn-danger" onclick="killExecution('${item.id}')">Kill (SIGKILL)</button>
+          </td>
+        </tr>
+      `).join("");
+    }
 
-      const base = serverInput.value.trim().replace(/\/+$/, '');
-      runBtn.disabled = true;
-      runBtn.textContent = '⏳ Running...';
+    async function killExecution(id) {
+      if (!confirm(`Are you sure you want to terminate execution ${id}?`)) return;
+      try {
+        const res = await fetch(`${config.host}/v1/admin/kill/${id}`, {
+          method: "POST",
+          headers: getHeaders()
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(`Process ${data.pid} killed successfully`);
+          fetchActiveExecutions();
+        } else {
+          showToast(`Kill failed: ${data.message || data.error}`, true);
+        }
+      } catch (err) {
+        showToast("Error killing process: " + err.message, true);
+      }
+    }
 
-      terminalBody.innerHTML = '<span style="color: #64748b;">Executing command safely via POSIX exec...</span>';
-      exitCodeTag.style.display = 'none';
-      durationTag.style.display = 'none';
+    async function toggleLockdown() {
+      const endpoint = isLockdown ? "/v1/admin/unlock" : "/v1/admin/lockdown";
+      try {
+        const res = await fetch(`${config.host}${endpoint}`, {
+          method: "POST",
+          headers: getHeaders()
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(data.message || "Lockdown status updated");
+          fetchStatus();
+        } else {
+          showToast(`Lockdown toggle failed: ${data.error}`, true);
+        }
+      } catch (err) {
+        showToast("Error toggling lockdown: " + err.message, true);
+      }
+    }
 
-      const startTime = performance.now();
+    function confirmShutdown() {
+      document.getElementById("shutdownModal").classList.add("open");
+    }
+
+    function closeShutdownModal() {
+      document.getElementById("shutdownModal").classList.remove("open");
+    }
+
+    async function performShutdown() {
+      closeShutdownModal();
+      try {
+        const res = await fetch(`${config.host}/v1/admin/shutdown`, {
+          method: "POST",
+          headers: getHeaders()
+        });
+        if (res.ok) {
+          showToast("Host daemon is shutting down.");
+          systemStateBadge.className = "badge badge-red";
+          systemStateBadge.innerText = "SHUT DOWN";
+        }
+      } catch (e) {
+        showToast("Shutdown failed: " + e.message, true);
+      }
+    }
+
+    function triggerRestartDaemon() {
+      document.getElementById("restartModal").classList.add("open");
+    }
+
+    function closeRestartModal() {
+      document.getElementById("restartModal").classList.remove("open");
+    }
+
+    async function performRestart() {
+      closeRestartModal();
+      try {
+        const res = await fetch(`${config.host}/v1/admin/restart`, {
+          method: "POST",
+          headers: getHeaders()
+        });
+        if (res.ok) {
+          showToast("Host daemon restart initiated. Reconnecting...");
+          systemStateBadge.className = "badge badge-amber";
+          systemStateBadge.innerText = "RESTARTING";
+          setTimeout(() => {
+            connectHost();
+          }, 2000);
+        } else {
+          const data = await res.json();
+          showToast("Restart failed: " + (data.message || data.error || "Unknown error"), true);
+        }
+      } catch (e) {
+        showToast("Restart failed: " + e.message, true);
+      }
+    }
+
+    async function loadTokens() {
+      try {
+        const res = await fetch(`${config.host}/v1/admin/tokens`, { headers: getHeaders() });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const tokens = await res.json();
+        const tbody = document.getElementById("tokensTableBody");
+        if (tokens.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color: var(--text-muted); padding: 1.5rem;">No tokens found.</td></tr>`;
+          return;
+        }
+        tbody.innerHTML = tokens.map(t => `
+          <tr>
+            <td><strong>${escapeHtml(t.name)}</strong></td>
+            <td><span class="badge badge-blue">${escapeHtml(t.policy)}</span></td>
+            <td>${t.os_user ? escapeHtml(t.os_user) : '<span style="color:var(--text-muted)">Default</span>'}</td>
+            <td>${t.tier ? escapeHtml(t.tier) : '<span style="color:var(--text-muted)">-</span>'}</td>
+            <td>${new Date(t.created_at).toLocaleDateString()}</td>
+            <td>${t.expires_at ? new Date(t.expires_at).toLocaleDateString() : 'Never'}</td>
+            <td>${t.last_used_at ? new Date(t.last_used_at).toLocaleTimeString() : 'Never'}</td>
+            <td style="text-align: right;">
+              <button class="btn btn-sm btn-danger" onclick="revokeToken('${escapeHtml(t.name)}')">Revoke</button>
+            </td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        showToast("Failed to load tokens: " + err.message, true);
+      }
+    }
+
+    async function handleCreateToken(e) {
+      e.preventDefault();
+      const name = document.getElementById("newTokenName").value.trim();
+      const policy = document.getElementById("newTokenPolicy").value;
+      const days = parseInt(document.getElementById("newTokenExpiry").value, 10);
+      const os_user = document.getElementById("newTokenOsUser").value.trim() || null;
 
       try {
-        const res = await fetch(`${base}/v1/exec`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ command: cmd })
+        const res = await fetch(`${config.host}/v1/admin/tokens`, {
+          method: "POST",
+          headers: getHeaders(),
+          body: JSON.stringify({
+            name,
+            policy,
+            expires_days: days > 0 ? days : null,
+            os_user: os_user,
+          })
         });
+        const data = await res.json();
+        if (res.ok && data.token) {
+          latestRawToken = data.token;
+          document.getElementById("tokenResultBox").innerText = data.token;
+          document.getElementById("tokenResultModal").classList.add("open");
+          document.getElementById("createTokenForm").reset();
+          loadTokens();
+        } else {
+          showToast("Token creation failed: " + (data.error || "Unknown error"), true);
+        }
+      } catch (err) {
+        showToast("Error creating token: " + err.message, true);
+      }
+    }
 
-        const elapsed = Math.round(performance.now() - startTime);
-        durationTag.textContent = `${elapsed}ms`;
-        durationTag.style.display = 'inline-block';
+    function copyGeneratedToken() {
+      navigator.clipboard.writeText(latestRawToken).then(() => {
+        showToast("Token copied to clipboard!");
+      });
+    }
 
+    async function revokeToken(name) {
+      if (!confirm(`Are you sure you want to revoke token '${name}'?`)) return;
+      try {
+        const res = await fetch(`${config.host}/v1/admin/tokens/revoke/${encodeURIComponent(name)}`, {
+          method: "POST",
+          headers: getHeaders()
+        });
+        if (res.ok) {
+          showToast(`Token '${name}' revoked.`);
+          loadTokens();
+        }
+      } catch (err) {
+        showToast("Error revoking token: " + err.message, true);
+      }
+    }
+
+    async function loadPolicies() {
+      try {
+        const res = await fetch(`${config.host}/v1/policies`);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const policies = await res.json();
+        
+        // Populate dropdown
+        const select = document.getElementById("newTokenPolicy");
+        select.innerHTML = policies.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+
+        // Populate policies list
+        const container = document.getElementById("policiesList");
+        container.innerHTML = policies.map(p => `
+          <div style="border:1px solid var(--border-default); border-radius:4px; padding:12px; margin-bottom:12px; background:var(--bg-canvas);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="font-weight:600; font-size:13px; color:var(--text-white);">${escapeHtml(p.name)}</span>
+              <span style="color:var(--text-muted); font-size:11px;">${escapeHtml(p.description || '')}</span>
+            </div>
+            ${p.deny && p.deny.length > 0 ? `
+              <div style="margin-top:6px;">
+                <span class="badge badge-red" style="margin-bottom:4px; display:inline-block;">DENY RULES (${p.deny.length})</span>
+                <div class="code" style="padding:6px; margin-top:2px;">${p.deny.map(r => escapeHtml(r.command + ' ' + (r.args||[]).join(' '))).join('<br>')}</div>
+              </div>` : ''}
+            ${p.rules && p.rules.length > 0 ? `
+              <div style="margin-top:6px;">
+                <span class="badge badge-green" style="margin-bottom:4px; display:inline-block;">ALLOW RULES (${p.rules.length})</span>
+                <div class="code" style="padding:6px; margin-top:2px;">${p.rules.map(r => escapeHtml(r.command + ' ' + (r.args||[]).join(' '))).join('<br>')}</div>
+              </div>` : ''}
+            ${p.actions && Object.keys(p.actions).length > 0 ? `
+              <div style="margin-top:6px;">
+                <span class="badge badge-purple" style="margin-bottom:4px; display:inline-block;">ACTIONS (${Object.keys(p.actions).length})</span>
+                <div class="code" style="padding:6px; margin-top:2px;">${Object.keys(p.actions).join(', ')}</div>
+              </div>` : ''}
+          </div>
+        `).join("");
+      } catch (err) {
+        console.error("Failed to load policies:", err);
+      }
+    }
+
+    async function executeConsoleCmd() {
+      const cmd = document.getElementById("consoleCmdInput").value.trim();
+      const cwd = document.getElementById("consoleCwdInput").value.trim();
+      const outBox = document.getElementById("consoleOutput");
+
+      if (!cmd) return;
+      outBox.innerText = `> ${cmd}\nExecuting...`;
+
+      try {
+        const body = { command: cmd };
+        if (cwd) body.cwd = cwd;
+
+        const res = await fetch(`${config.host}/v1/exec`, {
+          method: "POST",
+          headers: getHeaders(),
+          body: JSON.stringify(body)
+        });
         const data = await res.json();
 
         if (res.ok) {
-          exitCodeTag.textContent = `EXIT: ${data.exit_code}`;
-          exitCodeTag.className = data.exit_code === 0 ? 'tag success' : 'tag danger';
-          exitCodeTag.style.display = 'inline-block';
-
-          let outHtml = '';
-          if (data.stdout) {
-            outHtml += `<span class="stdout">${escapeHtml(data.stdout)}</span>`;
-          }
-          if (data.stderr) {
-            outHtml += `<span class="stderr">${escapeHtml(data.stderr)}</span>`;
-          }
-          if (!data.stdout && !data.stderr) {
-            outHtml = '<span style="color: #64748b;">(Command completed with empty output)</span>';
-          }
-          if (data.truncated) {
-            outHtml += '\n<span style="color: #f59e0b;">⚠️ Output was truncated to 5MB safety limit.</span>';
-          }
-
-          terminalBody.innerHTML = outHtml;
+          outBox.innerText = `[Exit Code: ${data.exit_code}] [${data.duration_ms}ms]\n\nSTDOUT:\n${data.stdout || '(empty)'}\n\nSTDERR:\n${data.stderr || '(empty)'}`;
         } else {
-          exitCodeTag.textContent = `HTTP ${res.status}`;
-          exitCodeTag.className = 'tag danger';
-          exitCodeTag.style.display = 'inline-block';
-
-          let errorMsg = data.message || data.error || JSON.stringify(data);
-          let title = res.status === 403 ? '❌ Policy Denied' : (res.status === 400 ? '🛡️ Shell Injection Blocked' : '⚠️ Request Error');
-
-          terminalBody.innerHTML = `<span style="color: #f87171; font-weight: 600;">${title}:</span>\n<span style="color: #cbd5e1;">${escapeHtml(errorMsg)}</span>`;
+          outBox.innerText = `HTTP ${res.status}: ${data.error || 'Unknown error'}\n${data.message || ''}`;
         }
       } catch (err) {
-        exitCodeTag.textContent = 'NETWORK ERROR';
-        exitCodeTag.className = 'tag danger';
-        exitCodeTag.style.display = 'inline-block';
-        terminalBody.innerHTML = `<span style="color: #f87171;">Connection Failed: ${escapeHtml(err.message)}</span>\n<span style="color: #94a3b8;">Make sure AgentGate is running and accepts connections. If using HTTPS with a self-signed cert, accept the certificate warning once in your browser.</span>`;
-      } finally {
-        runBtn.disabled = false;
-        runBtn.textContent = '▶ Run';
+        outBox.innerText = `Execution Error: ${err.message}`;
       }
     }
 
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
+    function escapeHtml(str) {
+      if (!str) return "";
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    runBtn.addEventListener('click', executeCommand);
+    // --- Auth & TOTP Flow ---
+    let currentSetupSecret = "";
+    let activeEditingFilePath = null;
 
-    // Initial check & preview
-    checkHealth();
-    updatePreviews();
-    setInterval(checkHealth, 10000);
+    function openLoginModal() {
+      document.getElementById("loginModal").classList.add("open");
+      switchAuthMethod('totp');
+      const input = document.getElementById("loginTotpInput");
+      if (input) input.focus();
+    }
+
+    function closeLoginModal() {
+      document.getElementById("loginModal").classList.remove("open");
+    }
+
+    function switchAuthMethod(method) {
+      const totpTab = document.getElementById("authTabTotp");
+      const setupTab = document.getElementById("authTabSetup");
+      const tokenTab = document.getElementById("authTabToken");
+
+      const totpStepCode = document.getElementById("totpStepCode");
+      const totpStepSetup = document.getElementById("totpStepSetup");
+      const tokenStep = document.getElementById("tokenStep");
+
+      [totpTab, setupTab, tokenTab].forEach(t => { if (t) t.classList.remove("active"); });
+      if (totpStepCode) totpStepCode.style.display = "none";
+      if (totpStepSetup) totpStepSetup.style.display = "none";
+      if (tokenStep) tokenStep.style.display = "none";
+
+      if (method === 'totp') {
+        if (totpTab) totpTab.classList.add("active");
+        if (totpStepCode) totpStepCode.style.display = "block";
+        const input = document.getElementById("loginTotpInput");
+        if (input) input.focus();
+      } else if (method === 'setup') {
+        if (setupTab) setupTab.classList.add("active");
+        if (totpStepSetup) totpStepSetup.style.display = "block";
+        loadTotpSetup();
+      } else {
+        if (tokenTab) tokenTab.classList.add("active");
+        if (tokenStep) tokenStep.style.display = "block";
+        const input = document.getElementById("modalTokenInput");
+        if (input) input.focus();
+      }
+    }
+
+    async function verifyTotpCode() {
+      const code = document.getElementById("loginTotpInput").value.trim();
+      if (!code || code.length < 6) {
+        showToast("Please enter the 6-digit authenticator code.", true);
+        return;
+      }
+
+      const verifyBtn = document.getElementById("verifyTotpBtn");
+      verifyBtn.disabled = true;
+      verifyBtn.innerText = "Verifying...";
+
+      try {
+        const res = await fetch(`${config.host}/v1/auth/totp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code })
+        });
+        const data = await res.json();
+
+        if (res.status === 428) {
+          showToast("TOTP not configured yet on this host. Opening setup wizard...", false);
+          switchAuthMethod('setup');
+          return;
+        }
+
+        if (res.ok && data.token) {
+          config.token = data.token;
+          tokenInput.value = data.token;
+          localStorage.setItem("agentgate_admin_token", data.token);
+          closeLoginModal();
+          showToast("Signed in successfully via Authenticator!");
+          connectHost();
+        } else {
+          showToast(`Verification failed: ${data.message || data.error || 'Invalid code'}`, true);
+        }
+      } catch (err) {
+        showToast(`Verification error: ${err.message}`, true);
+      } finally {
+        verifyBtn.disabled = false;
+        verifyBtn.innerText = "Verify & Sign In";
+      }
+    }
+
+    async function loadTotpSetup() {
+      const secretDisplay = document.getElementById("setupSecretKeyDisplay");
+      const linkEl = document.getElementById("setupOtpauthLink");
+      secretDisplay.innerText = "Generating secret...";
+
+      try {
+        const res = await fetch(`${config.host}/v1/auth/totp/setup`, {
+          headers: getHeaders()
+        });
+        const data = await res.json();
+        if (res.ok && data.secret) {
+          currentSetupSecret = data.secret;
+          secretDisplay.innerText = data.secret;
+          const uri = data.uri || data.otpauth_uri;
+          if (uri) {
+            linkEl.href = uri;
+            linkEl.style.display = "inline-flex";
+          } else {
+            linkEl.style.display = "none";
+          }
+        } else {
+          secretDisplay.innerText = "Unavailable: " + (data.message || data.error || "Cannot load");
+        }
+      } catch (err) {
+        secretDisplay.innerText = "Error: " + err.message;
+      }
+    }
+
+    function copySetupSecret() {
+      if (!currentSetupSecret) return;
+      navigator.clipboard.writeText(currentSetupSecret).then(() => {
+        showToast("Secret key copied to clipboard!");
+      });
+    }
+
+    async function confirmTotpSetup() {
+      const code = document.getElementById("setupVerifyCodeInput").value.trim();
+      if (!code || code.length < 6) {
+        showToast("Please enter the 6-digit confirmation code from your authenticator app.", true);
+        return;
+      }
+      if (!currentSetupSecret) {
+        showToast("No secret generated. Please reopen setup.", true);
+        return;
+      }
+
+      const btn = document.getElementById("confirmSetupBtn");
+      btn.disabled = true;
+      btn.innerText = "Activating...";
+
+      try {
+        const res = await fetch(`${config.host}/v1/auth/totp/setup`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ secret: currentSetupSecret, code })
+        });
+        const data = await res.json();
+
+        if (res.ok && data.token) {
+          config.token = data.token;
+          tokenInput.value = data.token;
+          localStorage.setItem("agentgate_admin_token", data.token);
+          closeLoginModal();
+          showToast("TOTP 2FA configured & signed in successfully!");
+          connectHost();
+        } else {
+          showToast(`Setup failed: ${data.message || data.error || 'Invalid code'}`, true);
+        }
+      } catch (err) {
+        showToast(`Setup error: ${err.message}`, true);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "Save & Activate 2FA";
+      }
+    }
+
+    function loginWithModalToken() {
+      const rawToken = document.getElementById("modalTokenInput").value.trim();
+      if (!rawToken) {
+        showToast("Please enter an access token.", true);
+        return;
+      }
+      config.token = rawToken;
+      tokenInput.value = rawToken;
+      localStorage.setItem("agentgate_admin_token", rawToken);
+      closeLoginModal();
+      showToast("Token saved. Connecting to host...");
+      connectHost();
+    }
+
+    async function checkAuthMe() {
+      const userBadge = document.getElementById("userEmailBadge");
+      const loginBtn = document.getElementById("loginTriggerBtn");
+      const logoutBtn = document.getElementById("logoutBtn");
+
+      if (!config.token) {
+        userBadge.style.display = "none";
+        logoutBtn.style.display = "none";
+        loginBtn.style.display = "inline-flex";
+        return;
+      }
+
+      try {
+        const res = await fetch(`${config.host}/v1/auth/me`, { headers: getHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.email) {
+            userBadge.innerText = data.email;
+            userBadge.style.display = "inline-block";
+            logoutBtn.style.display = "inline-flex";
+            loginBtn.style.display = "none";
+          }
+        } else {
+          if (config.token.startsWith("ag_")) {
+            userBadge.innerText = "Token: " + config.token.slice(0, 8) + "...";
+            userBadge.style.display = "inline-block";
+            logoutBtn.style.display = "inline-flex";
+            loginBtn.style.display = "none";
+          } else {
+            userBadge.style.display = "none";
+            logoutBtn.style.display = "none";
+            loginBtn.style.display = "inline-flex";
+          }
+        }
+      } catch (e) {
+        userBadge.style.display = "none";
+        logoutBtn.style.display = "none";
+        loginBtn.style.display = "inline-flex";
+      }
+    }
+
+    async function performLogout() {
+      try {
+        await fetch(`${config.host}/v1/auth/logout`, {
+          method: "POST",
+          headers: getHeaders()
+        });
+      } catch (_) {}
+
+      config.token = "";
+      tokenInput.value = "";
+      localStorage.removeItem("agentgate_admin_token");
+      showToast("Signed out.");
+      checkAuthMe();
+      fetchStatus();
+      openLoginModal();
+    }
+
+    // --- File & Policy Manager ---
+
+    async function loadFiles() {
+      const container = document.getElementById("filesListContainer");
+      if (!container) return;
+      container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 1.5rem;">Loading files...</div>`;
+
+      try {
+        const res = await fetch(`${config.host}/v1/admin/files`, { headers: getHeaders() });
+        if (!res.ok) {
+          throw new Error("HTTP " + res.status);
+        }
+        const files = await res.json();
+        if (!files || files.length === 0) {
+          container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 1.5rem;">No files found in configuration directory.</div>`;
+          return;
+        }
+
+        container.innerHTML = files.map(f => {
+          const isSelected = activeEditingFilePath === f.path;
+          const isProtected = f.path === "config.yaml" || f.path === "tokens.yaml";
+          const icon = f.path.startsWith("policies/") ? "🛡️" : "⚙️";
+          const sizeKb = (f.size_bytes / 1024).toFixed(1);
+          return `
+            <div onclick="selectFile('${escapeHtml(f.path)}')" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-radius: 4px; cursor: pointer; margin-bottom: 2px; background: ${isSelected ? 'var(--bg-overlay)' : 'transparent'}; border-left: 2px solid ${isSelected ? 'var(--color-blue)' : 'transparent'};">
+              <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
+                <span>${icon}</span>
+                <span style="font-family: var(--mono-font); font-size: 11px; color: ${isSelected ? 'var(--text-white)' : 'var(--text-primary)'}; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;">${escapeHtml(f.path)}</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 4px;">
+                ${isProtected ? '<span class="badge badge-amber" style="font-size: 9px;">LOCKED</span>' : ''}
+                <span style="color: var(--text-muted); font-size: 10px;">${sizeKb}KB</span>
+              </div>
+            </div>
+          `;
+        }).join("");
+      } catch (err) {
+        container.innerHTML = `<div style="text-align: center; color: var(--color-red); padding: 1.5rem;">Error loading files: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    async function selectFile(path) {
+      activeEditingFilePath = path;
+      const titleEl = document.getElementById("activeFilePathDisplay");
+      const sizeBadge = document.getElementById("activeFileSizeBadge");
+      const saveBtn = document.getElementById("fileSaveBtn");
+      const deleteBtn = document.getElementById("fileDeleteBtn");
+      const exportBtn = document.getElementById("fileExportBtn");
+      const editor = document.getElementById("fileEditorArea");
+
+      titleEl.innerText = path;
+      editor.value = "Loading file content...";
+
+      try {
+        const res = await fetch(`${config.host}/v1/admin/files/${encodeURIComponent(path)}`, { headers: getHeaders() });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+
+        editor.value = data.content || "";
+        sizeBadge.innerText = `${(data.size_bytes / 1024).toFixed(1)} KB`;
+        sizeBadge.style.display = "inline-block";
+
+        saveBtn.style.display = "inline-flex";
+        if (exportBtn) exportBtn.style.display = "inline-flex";
+
+        const isProtected = path === "config.yaml" || path === "tokens.yaml";
+        deleteBtn.style.display = isProtected ? "none" : "inline-flex";
+
+        lintPolicyYaml();
+        loadFiles();
+      } catch (err) {
+        editor.value = `Error loading ${path}: ${err.message}`;
+        showToast(`Failed to read file: ${err.message}`, true);
+      }
+    }
+
+    async function saveActiveFile() {
+      if (!activeEditingFilePath) return;
+      const editor = document.getElementById("fileEditorArea");
+      const saveBtn = document.getElementById("fileSaveBtn");
+      saveBtn.disabled = true;
+      saveBtn.innerText = "Saving...";
+
+      try {
+        const res = await fetch(`${config.host}/v1/admin/files/${encodeURIComponent(activeEditingFilePath)}`, {
+          method: "PUT",
+          headers: getHeaders(),
+          body: JSON.stringify({ content: editor.value })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(`File '${activeEditingFilePath}' saved successfully.`);
+          const sizeBadge = document.getElementById("activeFileSizeBadge");
+          if (sizeBadge && data.size_bytes !== undefined) {
+            sizeBadge.innerText = `${(data.size_bytes / 1024).toFixed(1)} KB`;
+          }
+          lintPolicyYaml();
+          loadFiles();
+          loadPolicies();
+        } else {
+          showToast(`Failed to save: ${data.error || 'Unknown error'}`, true);
+        }
+      } catch (err) {
+        showToast(`Save error: ${err.message}`, true);
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.innerText = "Save File";
+      }
+    }
+
+    async function deleteActiveFile() {
+      if (!activeEditingFilePath) return;
+      if (!confirm(`Are you sure you want to delete file '${activeEditingFilePath}'?`)) return;
+
+      try {
+        const res = await fetch(`${config.host}/v1/admin/files/${encodeURIComponent(activeEditingFilePath)}`, {
+          method: "DELETE",
+          headers: getHeaders()
+        });
+        if (res.ok) {
+          showToast(`File '${activeEditingFilePath}' deleted.`);
+          activeEditingFilePath = null;
+          document.getElementById("activeFilePathDisplay").innerText = "Select a file to edit";
+          document.getElementById("activeFileSizeBadge").style.display = "none";
+          document.getElementById("fileSaveBtn").style.display = "none";
+          document.getElementById("fileDeleteBtn").style.display = "none";
+          const exportBtn = document.getElementById("fileExportBtn");
+          if (exportBtn) exportBtn.style.display = "none";
+          const badge = document.getElementById("policyValidationBadge");
+          if (badge) badge.style.display = "none";
+          document.getElementById("fileEditorArea").value = "";
+          loadFiles();
+          loadPolicies();
+        } else {
+          const data = await res.json();
+          showToast(`Delete failed: ${data.error || 'Protected or non-existent'}`, true);
+        }
+      } catch (err) {
+        showToast(`Delete error: ${err.message}`, true);
+      }
+    }
+
+    function promptNewFile() {
+      const fileName = prompt("Enter new file path relative to config directory (e.g. policies/custom.yaml):");
+      if (!fileName || !fileName.trim()) return;
+      const cleanPath = fileName.trim();
+
+      if (cleanPath.startsWith('/') || cleanPath.includes('..')) {
+        showToast("Invalid path: Must be relative without parent traversal (..).", true);
+        return;
+      }
+
+      activeEditingFilePath = cleanPath;
+      document.getElementById("activeFilePathDisplay").innerText = cleanPath + " (New)";
+      document.getElementById("activeFileSizeBadge").style.display = "none";
+      document.getElementById("fileSaveBtn").style.display = "inline-flex";
+      document.getElementById("fileDeleteBtn").style.display = "none";
+      const exportBtn = document.getElementById("fileExportBtn");
+      if (exportBtn) exportBtn.style.display = "inline-flex";
+
+      const defaultTemplate = cleanPath.startsWith("policies/") ?
+`name: ${cleanPath.replace(/^policies\//, '').replace(/\.ya?ml$/, '')}
+description: "Custom policy created via control plane"
+guardrails: true
+rules:
+  - command: "uptime"
+  - command: "df"
+    args: ["-h"]
+` : `# Configuration: ${cleanPath}\n`;
+
+      const editor = document.getElementById("fileEditorArea");
+      editor.value = defaultTemplate;
+      lintPolicyYaml();
+      editor.focus();
+    }
+
+    function handleLocalFileImport(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const content = e.target.result;
+        const suggestedPath = "policies/" + file.name;
+        activeEditingFilePath = suggestedPath;
+
+        document.getElementById("activeFilePathDisplay").innerText = suggestedPath + " (Imported)";
+        const sizeBadge = document.getElementById("activeFileSizeBadge");
+        if (sizeBadge) {
+          sizeBadge.innerText = `${(content.length / 1024).toFixed(1)} KB`;
+          sizeBadge.style.display = "inline-block";
+        }
+        document.getElementById("fileSaveBtn").style.display = "inline-flex";
+        const exportBtn = document.getElementById("fileExportBtn");
+        if (exportBtn) exportBtn.style.display = "inline-flex";
+        document.getElementById("fileDeleteBtn").style.display = "none";
+
+        const editor = document.getElementById("fileEditorArea");
+        editor.value = content;
+        lintPolicyYaml();
+        showToast(`Loaded '${file.name}' from your computer. Click 'Save File' to upload to host.`);
+      };
+      reader.readAsText(file);
+      event.target.value = "";
+    }
+
+    function exportActiveFile() {
+      const editor = document.getElementById("fileEditorArea");
+      if (!editor || !editor.value) {
+        showToast("Editor is empty. Nothing to export.", true);
+        return;
+      }
+      const filename = activeEditingFilePath ? activeEditingFilePath.split('/').pop() : "policy.yaml";
+      const blob = new Blob([editor.value], { type: "text/yaml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast(`Exported '${filename}' to your computer.`);
+    }
+
+    function lintPolicyYaml() {
+      const badge = document.getElementById("policyValidationBadge");
+      if (!badge) return;
+
+      const content = document.getElementById("fileEditorArea").value;
+      if (!content.trim()) {
+        badge.style.display = "none";
+        return;
+      }
+
+      const isPolicy = (activeEditingFilePath && activeEditingFilePath.startsWith("policies/")) ||
+                       content.includes("rules:") || content.includes("deny:");
+
+      if (!isPolicy) {
+        badge.style.display = "inline-block";
+        badge.className = "badge badge-slate";
+        badge.innerText = "CONFIG";
+        return;
+      }
+
+      badge.style.display = "inline-block";
+
+      if (/^\t+/m.test(content)) {
+        badge.className = "badge badge-red";
+        badge.innerText = "✕ Tabs used for indentation (spaces required)";
+        return;
+      }
+
+      const hasName = /^name\s*:\s*(\S+)/m.test(content);
+      if (!hasName) {
+        badge.className = "badge badge-amber";
+        badge.innerText = "⚠ Missing 'name:' field";
+        return;
+      }
+
+      const allowMatches = content.match(/^\s*-\s*command\s*:/gm);
+      const ruleCount = allowMatches ? allowMatches.length : 0;
+      const guardrailsDisabled = /guardrails\s*:\s*false/i.test(content);
+
+      const dangerousPatterns = [
+        /\brm\s+-rf\b/,
+        /\bmkfs\b/,
+        /\bdd\s+if=/,
+        /\bchmod\s+777\b/,
+        /\|\s*(bash|sh)\b/
+      ];
+
+      let foundDangerous = false;
+      for (const pat of dangerousPatterns) {
+        if (pat.test(content)) {
+          foundDangerous = true;
+          break;
+        }
+      }
+
+      if (foundDangerous && guardrailsDisabled) {
+        badge.className = "badge badge-red";
+        badge.innerText = "✕ Critical: Dangerous commands with guardrails disabled!";
+      } else if (foundDangerous) {
+        badge.className = "badge badge-amber";
+        badge.innerText = `⚠ ${ruleCount} rules (High-risk commands detected)`;
+      } else if (ruleCount === 0 && !content.includes("deny:")) {
+        badge.className = "badge badge-amber";
+        badge.innerText = "⚠ 0 rules specified";
+      } else {
+        badge.className = "badge badge-green";
+        badge.innerText = `✓ Valid Policy (${ruleCount} allow rules)`;
+      }
+    }
   </script>
 </body>
 </html>

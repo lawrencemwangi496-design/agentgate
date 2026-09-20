@@ -84,6 +84,9 @@ pub enum Commands {
     /// View audit logs of executed and blocked commands
     Logs(LogsArgs),
 
+    /// Manage TOTP 2FA for dashboard authentication
+    Totp(TotpCommand),
+
     /// Update AgentGate to the latest release
     #[command(alias = "upgrade")]
     Update,
@@ -336,6 +339,24 @@ pub enum PolicySubcommand {
         /// Policy name
         name: String,
     },
+}
+
+#[derive(Args, Clone, Default)]
+pub struct TotpCommand {
+    #[command(subcommand)]
+    pub command: Option<TotpSubcommand>,
+}
+
+#[derive(Subcommand, Clone)]
+pub enum TotpSubcommand {
+    /// Setup or display TOTP 2FA secret for dashboard authentication
+    Setup {
+        /// Force re-generation of secret even if one already exists
+        #[arg(long, default_value_t = false)]
+        reset: bool,
+    },
+    /// Show whether TOTP authentication is currently configured
+    Status,
 }
 
 #[derive(Args, Clone, Default)]
@@ -1360,6 +1381,48 @@ pub fn handle_policy(cmd: Option<PolicySubcommand>, config: &AgentGateConfig) ->
     Ok(())
 }
 
+pub fn handle_totp(cmd: Option<TotpSubcommand>, config: &AgentGateConfig) -> Result<()> {
+    match cmd.unwrap_or(TotpSubcommand::Status) {
+        TotpSubcommand::Status => {
+            let existing = crate::dashboard::load_totp_secret(&config.totp_file)?;
+            if existing.is_some() {
+                println!("🟢 TOTP 2FA is CONFIGURED for dashboard authentication.");
+                println!("   Config file: {}", config.totp_file.display());
+                println!("   To reset: agentgated totp setup --reset");
+            } else {
+                println!("⚪ TOTP 2FA is NOT CONFIGURED.");
+                println!("   To configure: agentgated totp setup");
+            }
+        }
+        TotpSubcommand::Setup { reset } => {
+            let existing = crate::dashboard::load_totp_secret(&config.totp_file)?;
+            if existing.is_some() && !reset {
+                println!("⚠️  TOTP is already configured on this host.");
+                println!("   To replace it with a new secret, run: agentgated totp setup --reset");
+                return Ok(());
+            }
+
+            let secret = crate::dashboard::generate_secret();
+            crate::dashboard::save_totp_secret(&config.totp_file, &secret)?;
+
+            let uri = crate::dashboard::generate_otpauth_uri(&secret, "AgentGate", "admin");
+
+            println!("\n==========================================================");
+            println!("       🔐 AgentGate Dashboard TOTP Authenticator Setup");
+            println!("==========================================================");
+            println!("Secret Key:  {}", secret);
+            println!("URI:         {}", uri);
+            println!("Saved to:    {}", config.totp_file.display());
+            println!("----------------------------------------------------------");
+            println!("How to use:");
+            println!("  1. Open Google Authenticator, 1Password, Aegis, or Bitwarden");
+            println!("  2. Add new account and enter the Secret Key above");
+            println!("  3. Use the 6-digit code to log into the web dashboard\n");
+        }
+    }
+    Ok(())
+}
+
 pub fn handle_logs(args: LogsArgs, config: &AgentGateConfig) -> Result<()> {
     let logger = AuditLogger::new(config.logs_dir.clone());
     let entries = logger.read_recent(args.limit, args.token.as_deref(), args.denied)?;
@@ -1598,6 +1661,114 @@ pub async fn handle_main_menu(config: &AgentGateConfig) -> Result<()> {
     Ok(())
 }
 
+fn prompt_policy_selection(config: &AgentGateConfig) -> Result<String> {
+    use std::io::Write;
+
+    let store = PolicyStore::load(&config.policies_dir).ok();
+    let mut policies: Vec<Policy> = store
+        .map(|s| s.list().into_iter().cloned().collect())
+        .unwrap_or_default();
+
+    if policies.is_empty() {
+        let home = dirs::home_dir().unwrap_or_default();
+        let home_policies = home.join(".agentgate").join("policies");
+        let fallback_dirs: [&Path; 3] = [
+            Path::new("policies"),
+            Path::new("/etc/agentgate/policies"),
+            home_policies.as_path(),
+        ];
+        for dir in &fallback_dirs {
+            if let Ok(s) = PolicyStore::load(dir) {
+                let list = s.list();
+                if !list.is_empty() {
+                    policies = list.into_iter().cloned().collect();
+                    break;
+                }
+            }
+        }
+    }
+
+    println!("\nSelect Policy for this token:");
+    if !policies.is_empty() {
+        policies.sort_by(|a, b| {
+            if a.name == "standard" {
+                std::cmp::Ordering::Less
+            } else if b.name == "standard" {
+                std::cmp::Ordering::Greater
+            } else {
+                a.name.cmp(&b.name)
+            }
+        });
+
+        for (i, p) in policies.iter().enumerate() {
+            let desc = if p.description.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" - {}", p.description.trim())
+            };
+            if p.name == "standard" {
+                println!(
+                    "  \x1b[1m{})\x1b[0m \x1b[1;32m{}\x1b[0m (default){}",
+                    i + 1,
+                    p.name,
+                    desc
+                );
+            } else {
+                println!(
+                    "  \x1b[1m{})\x1b[0m \x1b[1;36m{}\x1b[0m{}",
+                    i + 1,
+                    p.name,
+                    desc
+                );
+            }
+        }
+        println!("  \x1b[1mC)\x1b[0m Custom policy name (enter manually)");
+        print!(
+            "\nSelect policy [1-{}, default: standard, 'b' to cancel]: ",
+            policies.len()
+        );
+    } else {
+        println!("  (No policies found in {})", config.policies_dir.display());
+        print!("Policy for this token [default: standard (all commands with guardrails), 'b' to cancel]: ");
+    }
+    std::io::stdout().flush()?;
+
+    let mut pol = String::new();
+    std::io::stdin().read_line(&mut pol)?;
+    let pol_trim = pol.trim();
+    if pol_trim == "b" || pol_trim == "back" || pol_trim == "cancel" {
+        bail!("Cancelled");
+    }
+
+    if pol_trim.is_empty() {
+        return Ok(if !policies.is_empty() {
+            policies[0].name.clone()
+        } else {
+            "standard".to_string()
+        });
+    }
+
+    if let Ok(num) = pol_trim.parse::<usize>() {
+        if num >= 1 && num <= policies.len() {
+            return Ok(policies[num - 1].name.clone());
+        }
+    }
+
+    if pol_trim.eq_ignore_ascii_case("c") || pol_trim.eq_ignore_ascii_case("custom") {
+        print!("Enter custom policy name: ");
+        std::io::stdout().flush()?;
+        let mut custom = String::new();
+        std::io::stdin().read_line(&mut custom)?;
+        let custom_trim = custom.trim();
+        if custom_trim.is_empty() {
+            return Ok("standard".to_string());
+        }
+        return Ok(custom_trim.to_string());
+    }
+
+    Ok(pol_trim.to_string())
+}
+
 fn handle_token_menu(config: &AgentGateConfig) -> Result<()> {
     use std::io::Write;
 
@@ -1628,19 +1799,12 @@ fn handle_token_menu(config: &AgentGateConfig) -> Result<()> {
                 name_trim.to_string()
             };
 
-            print!("Policy for this token [default: standard (all commands with guardrails), 'b' to cancel]: ");
-            std::io::stdout().flush()?;
-            let mut pol = String::new();
-            std::io::stdin().read_line(&mut pol)?;
-            let pol_trim = pol.trim();
-            if pol_trim == "b" || pol_trim == "back" || pol_trim == "cancel" {
-                println!("Cancelled.");
-                return Ok(());
-            }
-            let policy = if pol_trim.is_empty() {
-                "standard"
-            } else {
-                pol_trim
+            let policy = match prompt_policy_selection(config) {
+                Ok(p) => p,
+                Err(_) => {
+                    println!("Cancelled.\n");
+                    return Ok(());
+                }
             };
 
             println!("\nSelect expiration:");
@@ -1776,7 +1940,13 @@ async fn handle_server_setup_wizard(config: &AgentGateConfig) -> Result<()> {
     let tok_ans = tok_ans.trim().to_lowercase();
 
     if tok_ans == "y" || tok_ans == "yes" {
-        let policy = "standard";
+        let policy = match prompt_policy_selection(config) {
+            Ok(p) => p,
+            Err(_) => {
+                println!("Cancelled.\n");
+                return Ok(());
+            }
+        };
 
         println!("\nSelect token duration:");
         println!("  1) 24 hours");
@@ -1799,7 +1969,7 @@ async fn handle_server_setup_wizard(config: &AgentGateConfig) -> Result<()> {
             .as_deref()
             .and_then(|e| parse_duration(e).ok().flatten());
         let token_name = format!("agent-{}", &uuid::Uuid::new_v4().to_string()[..6]);
-        let raw_token = store.create(&token_name, policy, duration, None, None, None)?;
+        let raw_token = store.create(&token_name, &policy, duration, None, None, None)?;
         store.save()?;
 
         println!("\n🔑 Access Token Created:");
@@ -1887,10 +2057,20 @@ async fn handle_client_setup_wizard(config: &AgentGateConfig) -> Result<()> {
         Ok(r) if r.status().is_success() => {
             println!(" \x1b[32m✓ Connected successfully!\x1b[0m");
         }
-        _ => {
+        Ok(r) => {
             println!(
-                " \x1b[33m⚠️ Server unreachable or offline, saving credentials anyway.\x1b[0m"
+                " \x1b[33m⚠️ Server responded with HTTP status {}.\x1b[0m",
+                r.status()
             );
+        }
+        Err(e) => {
+            println!(" \x1b[33m⚠️ Server unreachable or connection refused.\x1b[0m");
+            println!("   \x1b[1;33m💡 Error details:\x1b[0m {}", e);
+            if e.is_connect() {
+                println!("   \x1b[36m👉 Tip:\x1b[0m If AgentGate is running on the remote host, make sure it was");
+                println!("          started with \x1b[1;32m--remote / 0.0.0.0\x1b[0m (all interfaces) rather than 127.0.0.1,");
+                println!("          and verify port {} is open in the server's firewall.", port);
+            }
         }
     }
 

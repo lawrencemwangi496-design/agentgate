@@ -277,6 +277,7 @@ fn test_client_config_serialization() {
 
     let cfg = ClientConfig {
         server: "https://127.0.0.1:8991".to_string(),
+        socket: None,
         token: "ag_1234567890abcdef1234567890abcdef".to_string(),
         insecure_tls: true,
     };
@@ -435,18 +436,29 @@ async fn test_cors_hardened_by_default_and_configurable() {
         certs_dir: temp_dir.join("certs"),
         logs_dir: temp_dir.join("logs"),
         pid_file: temp_dir.join("pid"),
+        socket_path: temp_dir.join("agentgated.sock"),
         listen_addr: "127.0.0.1".to_string(),
         listen_port: 7991,
         allowed_origins: vec![], // Default: NO CORS
+        dashboard: None,
+        totp_file: temp_dir.join("totp.yaml"),
     };
 
     let state = AppState {
         tokens_file: config.tokens_file.clone(),
         policies_dir: config.policies_dir.clone(),
+        config_dir: config.config_dir.clone(),
         audit_logger: Arc::new(AuditLogger::new(config.logs_dir.clone())),
         trusted_proxies: vec!["127.0.0.1".to_string()],
         auth_throttler: agentgate::server::AuthThrottler::default(),
         rate_limiter: agentgate::server::RequestRateLimiter::disabled(),
+        lockdown_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        active_executions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        shutdown_tx: Arc::new(tokio::sync::broadcast::channel(8).0),
+        start_time: chrono::Utc::now(),
+        totp_file: config.totp_file.clone(),
+        session_manager: Arc::new(agentgate::dashboard::session::SessionManager::new()),
+        dashboard_config: None,
     };
 
     // 1. Default configuration: no CORS header returned for cross-origin request
@@ -524,9 +536,12 @@ async fn test_auth_failure_throttling_and_lockout() {
         certs_dir: temp_dir.join("certs"),
         logs_dir: temp_dir.join("logs"),
         pid_file: temp_dir.join("pid"),
+        socket_path: temp_dir.join("agentgated.sock"),
         listen_addr: "127.0.0.1".to_string(),
         listen_port: 7991,
         allowed_origins: vec![],
+        dashboard: None,
+        totp_file: temp_dir.join("totp.yaml"),
     };
 
     // 3 failures within 5 seconds triggers 5 second lockout
@@ -535,10 +550,18 @@ async fn test_auth_failure_throttling_and_lockout() {
     let state = AppState {
         tokens_file: config.tokens_file.clone(),
         policies_dir: config.policies_dir.clone(),
+        config_dir: config.config_dir.clone(),
         audit_logger: Arc::new(AuditLogger::new(config.logs_dir.clone())),
         trusted_proxies: vec!["127.0.0.1".to_string()],
         auth_throttler: throttler,
         rate_limiter: agentgate::server::RequestRateLimiter::disabled(),
+        lockdown_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        active_executions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        shutdown_tx: Arc::new(tokio::sync::broadcast::channel(8).0),
+        start_time: chrono::Utc::now(),
+        totp_file: config.totp_file.clone(),
+        session_manager: Arc::new(agentgate::dashboard::session::SessionManager::new()),
+        dashboard_config: None,
     };
 
     let mut router = create_router(&config, state);
@@ -1115,9 +1138,12 @@ async fn test_rate_limit_middleware_returns_429() {
         certs_dir: temp_dir.join("certs"),
         logs_dir: temp_dir.join("logs"),
         pid_file: temp_dir.join("pid"),
+        socket_path: temp_dir.join("agentgated.sock"),
         listen_addr: "127.0.0.1".to_string(),
         listen_port: 7991,
         allowed_origins: vec![],
+        dashboard: None,
+        totp_file: temp_dir.join("totp.yaml"),
     };
 
     // Capacity 2, 0 refill rate
@@ -1126,10 +1152,18 @@ async fn test_rate_limit_middleware_returns_429() {
     let state = AppState {
         tokens_file: config.tokens_file.clone(),
         policies_dir: config.policies_dir.clone(),
+        config_dir: config.config_dir.clone(),
         audit_logger: Arc::new(agentgate::audit::AuditLogger::new(config.logs_dir.clone())),
         trusted_proxies: vec![],
         auth_throttler: agentgate::server::AuthThrottler::default(),
         rate_limiter: limiter,
+        lockdown_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        active_executions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        shutdown_tx: Arc::new(tokio::sync::broadcast::channel(8).0),
+        start_time: chrono::Utc::now(),
+        totp_file: config.totp_file.clone(),
+        session_manager: Arc::new(agentgate::dashboard::session::SessionManager::new()),
+        dashboard_config: None,
     };
 
     let router = create_router(&config, state);
@@ -1181,9 +1215,12 @@ fn test_find_running_daemon_reads_pid_file() {
         certs_dir: temp_dir.join("certs"),
         logs_dir: temp_dir.join("logs"),
         pid_file: pid_file.clone(),
+        socket_path: temp_dir.join("agentgated.sock"),
         listen_addr: "127.0.0.1".to_string(),
         listen_port: 7991,
         allowed_origins: vec![],
+        dashboard: None,
+        totp_file: temp_dir.join("totp.yaml"),
     };
 
     let detected = find_running_daemon(&config);

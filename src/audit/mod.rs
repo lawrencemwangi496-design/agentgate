@@ -26,19 +26,34 @@ pub enum AuditResult {
     Error,
 }
 
+use tokio::sync::broadcast;
+
 pub struct AuditLogger {
     log_dir: PathBuf,
+    broadcast_tx: broadcast::Sender<AuditEntry>,
 }
 
 impl AuditLogger {
     pub fn new(log_dir: PathBuf) -> Self {
         fs::create_dir_all(&log_dir).unwrap_or_default();
-        Self { log_dir }
+        let (broadcast_tx, _) = broadcast::channel(1024);
+        Self {
+            log_dir,
+            broadcast_tx,
+        }
+    }
+
+    /// Subscribe to real-time audit log events
+    pub fn subscribe(&self) -> broadcast::Receiver<AuditEntry> {
+        self.broadcast_tx.subscribe()
     }
 
     /// Log an audit entry. Appends as JSON line to a date-stamped log file.
     /// File format: {log_dir}/audit-{YYYY-MM-DD}.jsonl
     pub fn log(&self, entry: &AuditEntry) -> anyhow::Result<()> {
+        // Broadcast to live dashboard / websocket subscribers
+        let _ = self.broadcast_tx.send(entry.clone());
+
         let date_str = entry.timestamp.format("%Y-%m-%d").to_string();
         let filename = format!("audit-{}.jsonl", date_str);
         let file_path = self.log_dir.join(filename);

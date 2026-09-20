@@ -7,10 +7,24 @@ use std::path::PathBuf;
 /// Saved client credentials configuration
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClientConfig {
+    #[serde(default)]
     pub server: String,
+    #[serde(default)]
+    pub socket: Option<String>,
     pub token: String,
     #[serde(default = "default_insecure")]
     pub insecure_tls: bool,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            server: "https://127.0.0.1:7991".to_string(),
+            socket: None,
+            token: String::new(),
+            insecure_tls: true,
+        }
+    }
 }
 
 fn default_insecure() -> bool {
@@ -53,6 +67,7 @@ pub fn load_client_config() -> Result<Option<ClientConfig>> {
             .unwrap_or_else(|| "https://127.0.0.1:7991".to_string());
         return Ok(Some(ClientConfig {
             server,
+            socket: None,
             token: token.trim().to_string(),
             insecure_tls: true,
         }));
@@ -63,6 +78,16 @@ pub fn load_client_config() -> Result<Option<ClientConfig>> {
 
 /// Save client configuration with safe permissions (0600)
 pub fn save_client_config(server: &str, token: &str, insecure_tls: bool) -> Result<PathBuf> {
+    save_client_config_with_socket(server, None, token, insecure_tls)
+}
+
+/// Save client configuration with optional socket override and safe permissions (0600)
+pub fn save_client_config_with_socket(
+    server: &str,
+    socket: Option<String>,
+    token: &str,
+    insecure_tls: bool,
+) -> Result<PathBuf> {
     let file_path = client_config_path()?;
     if let Some(parent) = file_path.parent() {
         fs::create_dir_all(parent)
@@ -71,6 +96,7 @@ pub fn save_client_config(server: &str, token: &str, insecure_tls: bool) -> Resu
 
     let cfg = ClientConfig {
         server: server.trim_end_matches('/').to_string(),
+        socket,
         token: token.trim().to_string(),
         insecure_tls,
     };
@@ -89,6 +115,56 @@ pub fn save_client_config(server: &str, token: &str, insecure_tls: bool) -> Resu
     }
 
     Ok(file_path)
+}
+
+/// Send an HTTP request directly over a local Unix Domain Socket using hyper
+pub async fn send_unix_request(
+    socket_path: &std::path::Path,
+    method_str: &str,
+    path: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> Result<(u16, String)> {
+    let stream = tokio::net::UnixStream::connect(socket_path).await
+        .with_context(|| format!("Failed to connect to local AgentGate socket at {}", socket_path.display()))?;
+    let io = hyper_util::rt::TokioIo::new(stream);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await
+        .context("HTTP handshake failed over Unix socket")?;
+
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+
+    let method = match method_str {
+        "POST" => hyper::Method::POST,
+        "GET" => hyper::Method::GET,
+        _ => hyper::Method::POST,
+    };
+
+    let body_bytes = serde_json::to_vec(body)?;
+    let mut builder = hyper::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("Host", "localhost")
+        .header("Content-Type", "application/json");
+
+    if !token.trim().is_empty() {
+        builder = builder.header("Authorization", format!("Bearer {}", token.trim()));
+    }
+
+    let req = builder
+        .body(http_body_util::Full::new(bytes::Bytes::from(body_bytes)))
+        .context("Failed to build HTTP request for Unix socket")?;
+
+    let resp = sender.send_request(req).await
+        .context("Failed to send request over Unix socket")?;
+    let status_code = resp.status().as_u16();
+
+    use http_body_util::BodyExt;
+    let resp_bytes = resp.into_body().collect().await?.to_bytes();
+    let text = String::from_utf8_lossy(&resp_bytes).to_string();
+
+    Ok((status_code, text))
 }
 
 /// Handle `agentgate login`
@@ -488,13 +564,10 @@ pub async fn handle_exec(
         std::process::exit(1);
     }
 
-    let saved_cfg = load_client_config()?.unwrap_or_else(|| ClientConfig {
-        server: "https://127.0.0.1:7991".to_string(),
-        token: String::new(),
-        insecure_tls: true,
-    });
+    let saved_cfg = load_client_config()?.unwrap_or_default();
 
     let server_url = server_override
+        .clone()
         .or_else(|| std::env::var("AGENTGATE_SERVER").ok())
         .unwrap_or(saved_cfg.server)
         .trim_end_matches('/')
@@ -513,47 +586,61 @@ pub async fn handle_exec(
         std::process::exit(1);
     }
 
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(saved_cfg.insecure_tls)
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .context("Failed to build HTTP client")?;
-
-    let exec_url = format!("{}/v1/exec", server_url);
-
     let mut body = serde_json::json!({ "command": command_str });
     if let Some(dir) = cwd {
         body["cwd"] = serde_json::Value::String(dir);
     }
 
-    let resp = match client
-        .post(&exec_url)
-        .header("Authorization", format!("Bearer {}", token.trim()))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            if !quiet {
-                eprintln!(
-                    "❌ Could not connect to AgentGate server at {}: {}",
-                    server_url, e
-                );
-                eprintln!("💡 Is the AgentGate daemon running? Start it with: agentgate start");
+    let default_sock = crate::config::AgentGateConfig::default_socket_path();
+    let use_socket = server_override.is_none()
+        && (saved_cfg.socket.is_some() || server_url.contains("127.0.0.1") || server_url.contains("localhost"))
+        && default_sock.exists();
+
+    let (status_code, text) = if use_socket {
+        match send_unix_request(&default_sock, "POST", "/v1/exec", token.trim(), &body).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                if !quiet {
+                    eprintln!("❌ Could not communicate with Host Daemon over local socket {}: {}", default_sock.display(), e);
+                    eprintln!("💡 Ensure the host daemon is running: agentgated start");
+                }
+                std::process::exit(1);
             }
-            std::process::exit(1);
         }
+    } else {
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(saved_cfg.insecure_tls)
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .context("Failed to build HTTP client")?;
+
+        let exec_url = format!("{}/v1/exec", server_url);
+        let resp = match client
+            .post(&exec_url)
+            .header("Authorization", format!("Bearer {}", token.trim()))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                if !quiet {
+                    eprintln!(
+                        "❌ Could not connect to AgentGate server at {}: {}",
+                        server_url, e
+                    );
+                    eprintln!("💡 If running remotely, check network/firewall. If local, start with: agentgated start");
+                }
+                std::process::exit(1);
+            }
+        };
+        let code = resp.status().as_u16();
+        let body_str = resp.text().await.unwrap_or_default();
+        (code, body_str)
     };
 
-    let status = resp.status();
-
-    if status.is_success() {
-        let text = resp
-            .text()
-            .await
-            .context("Failed to read server response body")?;
+    if status_code >= 200 && status_code < 300 {
         if json_mode {
             println!("{}", text);
             return Ok(());
@@ -573,21 +660,25 @@ pub async fn handle_exec(
                 std::process::exit(res.exit_code);
             }
             Err(_) => {
-                // If parsing fails, just output raw text
                 print!("{}", text);
                 return Ok(());
             }
         }
     }
 
-    let text = resp.text().await.unwrap_or_default();
     let err_msg = if let Ok(err_obj) = serde_json::from_str::<ServerErrorResponse>(&text) {
         err_obj.message
     } else {
         text
     };
 
-    match status.as_u16() {
+    match status_code {
+        423 => {
+            if !quiet {
+                eprintln!("🚨 AgentGate Emergency Lockdown: {}", err_msg);
+            }
+            std::process::exit(125);
+        }
         400 => {
             if !quiet {
                 eprintln!("❌ AgentGate Injection Blocked: {}", err_msg);
@@ -609,7 +700,7 @@ pub async fn handle_exec(
         }
         _ => {
             if !quiet {
-                eprintln!("❌ AgentGate Error (HTTP {}): {}", status, err_msg);
+                eprintln!("❌ AgentGate Error (HTTP {}): {}", status_code, err_msg);
             }
             std::process::exit(1);
         }
@@ -685,11 +776,7 @@ pub async fn handle_mcp() -> Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
-    let saved_cfg = load_client_config()?.unwrap_or_else(|| ClientConfig {
-        server: "https://127.0.0.1:7991".to_string(),
-        token: String::new(),
-        insecure_tls: true,
-    });
+    let saved_cfg = load_client_config()?.unwrap_or_default();
 
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(saved_cfg.insecure_tls)
@@ -1072,11 +1159,7 @@ pub async fn handle_shell(
 
 /// Handle `agentgate action <name> [-p key=value...]`
 pub async fn handle_action(args: crate::cli::ActionArgs) -> Result<()> {
-    let saved_cfg = load_client_config()?.unwrap_or_else(|| ClientConfig {
-        server: "https://127.0.0.1:7991".to_string(),
-        token: String::new(),
-        insecure_tls: true,
-    });
+    let saved_cfg = load_client_config()?.unwrap_or_default();
 
     let server_url = args
         .server

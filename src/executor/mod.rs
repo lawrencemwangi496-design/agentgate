@@ -184,20 +184,26 @@ pub fn resolve_os_user(username: &str) -> Result<(u32, u32, PathBuf)> {
     }
 }
 
-/// Execute a parsed command with hardened security controls:
-/// - Executes the resolved binary directly without shell
-/// - Strips environment variables (env_clear) to prevent secret leakage
-/// - Injects minimal, sanitized standard environment
-/// - Enforces non-interactive stdin (Stdio::null)
-/// - Drops privileges to dedicated per-token OS user (uid, gid, empty groups) if configured
-/// - Enforces strict output size limit (5MB) to prevent RAM exhaustion
-/// - Kills child process if execution timeout expires
 pub async fn execute(
     cmd: &ParsedCommand,
     timeout_secs: u64,
     os_user: Option<&str>,
     cwd: Option<&str>,
 ) -> Result<ExecResult> {
+    execute_tracked(cmd, timeout_secs, os_user, cwd, |_| {}).await
+}
+
+/// Execute a parsed command with hardened security controls and report child PID
+pub async fn execute_tracked<F>(
+    cmd: &ParsedCommand,
+    timeout_secs: u64,
+    os_user: Option<&str>,
+    cwd: Option<&str>,
+    on_spawn: F,
+) -> Result<ExecResult>
+where
+    F: FnOnce(u32),
+{
     let start = Instant::now();
 
     let mut builder = Command::new(&cmd.binary_path);
@@ -280,6 +286,10 @@ pub async fn execute(
     let mut child = builder
         .spawn()
         .map_err(|e| anyhow::anyhow!("Failed to spawn process {:?}: {}", cmd.binary_path, e))?;
+
+    if let Some(pid) = child.id() {
+        on_spawn(pid);
+    }
 
     let mut stdout_pipe = child.stdout.take().expect("stdout piped");
     let mut stderr_pipe = child.stderr.take().expect("stderr piped");
