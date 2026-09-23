@@ -1323,27 +1323,26 @@ fn authenticate_admin(
         return Ok("local-admin".to_string());
     }
 
-    if let Some(h) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
-        if let Some(token) = h.strip_prefix("Bearer ") {
-            let token = token.trim();
-            if token.starts_with("dash_") {
-                if let Ok(claims) = state.session_manager.validate_token(token) {
-                    return Ok(claims.email);
-                }
-            } else if token.starts_with("ag_") {
-                if let Ok(mut store) = TokenStore::load(&state.tokens_file) {
-                    if let Ok(Some(t)) = store.validate(token) {
-                        return Ok(t.name);
-                    }
-                }
+    if let Some(h) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok())
+        && let Some(token) = h.strip_prefix("Bearer ")
+    {
+        let token = token.trim();
+        if token.starts_with("dash_") {
+            if let Ok(claims) = state.session_manager.validate_token(token) {
+                return Ok(claims.email);
             }
+        } else if token.starts_with("ag_")
+            && let Ok(mut store) = TokenStore::load(&state.tokens_file)
+            && let Ok(Some(t)) = store.validate(token)
+        {
+            return Ok(t.name);
         }
     }
 
-    if let Ok(store) = TokenStore::load(&state.tokens_file) {
-        if store.list().is_empty() {
-            return Ok("initial-setup".to_string());
-        }
+    if let Ok(store) = TokenStore::load(&state.tokens_file)
+        && store.list().is_empty()
+    {
+        return Ok("initial-setup".to_string());
     }
 
     Err((
@@ -1386,10 +1385,10 @@ async fn admin_stream_handler(
         let mut valid = false;
         if t.starts_with("dash_") {
             valid = state.session_manager.validate_token(&t).is_ok();
-        } else if t.starts_with("ag_") {
-            if let Ok(mut store) = TokenStore::load(&state.tokens_file) {
-                valid = store.validate(&t).map(|res| res.is_some()).unwrap_or(false);
-            }
+        } else if t.starts_with("ag_")
+            && let Ok(mut store) = TokenStore::load(&state.tokens_file)
+        {
+            valid = store.validate(&t).map(|res| res.is_some()).unwrap_or(false);
         }
         valid
     } else {
@@ -1531,20 +1530,20 @@ async fn admin_kill_handler(
 
 
     let map = state.active_executions.read().await;
-    if let Some(entry) = map.get(&id) {
-        if let Some(pid) = entry.pid {
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(pid as i32, libc::SIGKILL);
-            }
-            warn!("Admin killed execution {} (PID {})", id, pid);
-            return Json(serde_json::json!({
-                "status": "killed",
-                "id": id,
-                "pid": pid,
-                "command": entry.command
-            })).into_response();
+    if let Some(entry) = map.get(&id)
+        && let Some(pid) = entry.pid
+    {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(pid as i32, libc::SIGKILL);
         }
+        warn!("Admin killed execution {} (PID {})", id, pid);
+        return Json(serde_json::json!({
+            "status": "killed",
+            "id": id,
+            "pid": pid,
+            "command": entry.command
+        })).into_response();
     }
 
     (StatusCode::NOT_FOUND, Json(serde_json::json!({
@@ -1922,20 +1921,20 @@ pub async fn admin_files_list_handler(
     for (prefix, dir_path) in dirs_to_scan {
         if let Ok(entries) = std::fs::read_dir(&dir_path) {
             for entry in entries.flatten() {
-                if let Ok(metadata) = entry.metadata() {
-                    if metadata.is_file() {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        let rel_path = if prefix.is_empty() { name } else { format!("{}/{}", prefix, name) };
-                        let modified = metadata.modified()
-                            .map(|st| chrono::DateTime::<Utc>::from(st).to_rfc3339())
-                            .unwrap_or_default();
-                        
-                        files.push(FileInfo {
-                            path: rel_path,
-                            size_bytes: metadata.len(),
-                            modified,
-                        });
-                    }
+                if let Ok(metadata) = entry.metadata()
+                    && metadata.is_file()
+                {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let rel_path = if prefix.is_empty() { name } else { format!("{}/{}", prefix, name) };
+                    let modified = metadata.modified()
+                        .map(|st| chrono::DateTime::<Utc>::from(st).to_rfc3339())
+                        .unwrap_or_default();
+                    
+                    files.push(FileInfo {
+                        path: rel_path,
+                        size_bytes: metadata.len(),
+                        modified,
+                    });
                 }
             }
         }

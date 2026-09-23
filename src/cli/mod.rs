@@ -1791,10 +1791,10 @@ fn prompt_policy_selection(config: &AgentGateConfig) -> Result<String> {
         });
     }
 
-    if let Ok(num) = pol_trim.parse::<usize>() {
-        if num >= 1 && num <= policies.len() {
-            return Ok(policies[num - 1].name.clone());
-        }
+    if let Ok(num) = pol_trim.parse::<usize>()
+        && (1..=policies.len()).contains(&num)
+    {
+        return Ok(policies[num - 1].name.clone());
     }
 
     if pol_trim.eq_ignore_ascii_case("c") || pol_trim.eq_ignore_ascii_case("custom") {

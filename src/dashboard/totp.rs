@@ -29,7 +29,7 @@ pub struct TotpStoredConfig {
 /// Encode raw bytes to RFC 4648 Base32 string (uppercase, no padding).
 #[must_use]
 pub fn base32_encode(data: &[u8]) -> String {
-    let mut result = String::with_capacity((data.len() * 8 + 4) / 5);
+    let mut result = String::with_capacity((data.len() * 8).div_ceil(5));
     let mut buffer: u64 = 0;
     let mut bits_in_buffer: u32 = 0;
 
@@ -139,10 +139,10 @@ pub fn verify_totp(secret_b32: &str, candidate_code: &str, timestamp_secs: u64) 
             timestamp_secs
         };
 
-        if let Ok(expected_code) = compute_totp(&secret_bytes, check_time, TOTP_STEP_SECONDS) {
-            if expected_code.as_bytes().ct_eq(clean_code.as_bytes()).unwrap_u8() == 1 {
-                return Ok(true);
-            }
+        if let Ok(expected_code) = compute_totp(&secret_bytes, check_time, TOTP_STEP_SECONDS)
+            && expected_code.as_bytes().ct_eq(clean_code.as_bytes()).unwrap_u8() == 1
+        {
+            return Ok(true);
         }
     }
 

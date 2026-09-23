@@ -640,7 +640,7 @@ pub async fn handle_exec(
         (code, body_str)
     };
 
-    if status_code >= 200 && status_code < 300 {
+    if (200..300).contains(&status_code) {
         if json_mode {
             println!("{}", text);
             return Ok(());
