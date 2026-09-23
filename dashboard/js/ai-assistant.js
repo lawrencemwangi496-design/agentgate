@@ -12,7 +12,7 @@ export const chatState = {
   messages: [
     {
       role: "assistant",
-      content: "Hello! I am your **AgentGate Policy Architect**. Describe the agent role, permissions, or boundaries you need, and I will generate a hardened YAML policy ready to deploy.",
+      content: "Specify required agent capabilities, allowed binary executions, directory boundaries, and security constraints. The synthesizer produces hardened YAML policies validated against AgentGate guardrails.",
     }
   ],
   isGenerating: false,
@@ -113,7 +113,7 @@ function formatAiResponse(text, msgIdx) {
           <div style="display: flex; gap: 4px;">
             <button class="btn btn-sm" onclick="window.copyAiYaml('${b.id}')">Copy</button>
             <button class="btn btn-sm" onclick="window.loadAiYamlIntoEditor('${b.id}')">Open in Editor</button>
-            <button class="btn btn-sm btn-primary" onclick="window.deployAiYamlToServer('${b.id}', '${escapeHtml(b.name)}')">🚀 Deploy to Server</button>
+            <button class="btn btn-sm btn-primary" onclick="window.deployAiYamlToServer('${b.id}', '${escapeHtml(b.name)}')">Deploy to Daemon</button>
           </div>
         </div>
         <pre class="code-block-body" id="${b.id}">${escapeHtml(b.code)}</pre>

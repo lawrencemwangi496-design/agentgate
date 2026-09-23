@@ -53,12 +53,12 @@ export function renderPolicyCards(policies, files) {
       <div class="card" style="margin-bottom: 0;">
         <div class="card-header">
           <div class="card-title">
-            <span>🛡️</span>
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
             <span>${escapeHtml(p.name)}</span>
           </div>
           <div style="display: flex; gap: 4px;">
-            <button class="btn btn-sm" onclick="window.selectPolicyForEdit('${escapeHtml(filename)}')">Edit</button>
-            <button class="btn btn-sm" onclick="window.exportPolicyToPc('${escapeHtml(filename)}')">📤 Export</button>
+            <button class="btn btn-sm" onclick="window.selectPolicyForEdit('${escapeHtml(filename)}')">Inspect</button>
+            <button class="btn btn-sm" onclick="window.exportPolicyToPc('${escapeHtml(filename)}')">Export</button>
           </div>
         </div>
         <div class="card-body">
@@ -66,9 +66,9 @@ export function renderPolicyCards(policies, files) {
             ${escapeHtml(p.description || "No description provided.")}
           </p>
           <div style="display: flex; flex-wrap: wrap; gap: 6px;">
-            <span class="badge ${allowCount > 0 ? "badge-green" : "badge-slate"}">${allowCount} ALLOW RULES</span>
-            ${denyCount > 0 ? `<span class="badge badge-red">${denyCount} DENY RULES</span>` : ""}
-            ${actionCount > 0 ? `<span class="badge badge-purple">${actionCount} ACTIONS</span>` : ""}
+            <span class="badge ${allowCount > 0 ? "badge-green" : "badge-slate"}">${allowCount} ALLOW</span>
+            ${denyCount > 0 ? `<span class="badge badge-red">${denyCount} DENY</span>` : ""}
+            ${actionCount > 0 ? `<span class="badge badge-blue">${actionCount} ACTIONS</span>` : ""}
             <span class="badge ${p.guardrails !== false ? "badge-blue" : "badge-amber"}">
               ${p.guardrails !== false ? "GUARDRAILS ON" : "GUARDRAILS OFF"}
             </span>
@@ -84,7 +84,7 @@ export function renderPolicyFilesList(files) {
   if (!container) return;
 
   if (files.length === 0) {
-    container.innerHTML = `<div style="color: var(--text-muted); padding: 10px;">No files.</div>`;
+    container.innerHTML = `<div style="color: var(--text-muted); padding: 10px; font-size: 11px;">No policy files found.</div>`;
     return;
   }
 
@@ -96,13 +96,13 @@ export function renderPolicyFilesList(files) {
     return `
       <div onclick="window.selectPolicyForEdit('${escapeHtml(f.path)}')"
            style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: var(--radius-sm); cursor: pointer; margin-bottom: 2px; background: ${isSelected ? "var(--bg-overlay)" : "transparent"};">
-        <div style="display: flex; align-items: center; gap: 6px; overflow: hidden;">
-          <span>${f.path.startsWith("policies/") ? "🛡️" : "⚙️"}</span>
-          <span style="font-family: var(--font-mono); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;">
+        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
+          <svg class="icon icon-sm" viewBox="0 0 24 24" style="color: ${f.path.startsWith('policies/') ? 'var(--color-blue)' : 'var(--text-muted)'};"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span style="font-family: var(--font-mono); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; color: var(--text-primary);">
             ${escapeHtml(f.path)}
           </span>
         </div>
-        <span style="color: var(--text-muted); font-size: 10px;">${sizeKb}KB</span>
+        <span style="color: var(--text-muted); font-size: 10px; font-family: var(--font-mono);">${sizeKb} KB</span>
       </div>
     `;
   }).join("");
@@ -188,18 +188,18 @@ export function stageUploadedPolicy(filename, content) {
   stagingEl.innerHTML = `
     <div class="staged-policy-card">
       <div style="display: flex; align-items: center; gap: 12px;">
-        <span style="font-size: 24px;">📥</span>
+        <svg class="icon icon-lg" viewBox="0 0 24 24" style="color: var(--color-blue);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         <div>
           <div style="font-weight: 600; color: var(--text-white); font-size: 13px;">
-            ${escapeHtml(filename)} &rarr; <span style="color: var(--color-blue);">${escapeHtml(targetPath)}</span>
+            ${escapeHtml(filename)} &rarr; <span style="color: var(--color-blue); font-family: var(--font-mono);">${escapeHtml(targetPath)}</span>
           </div>
           <div style="color: var(--text-secondary); font-size: 11px; margin-top: 2px;">
-            Policy: <strong>${escapeHtml(policyName)}</strong> | Rules detected: ${ruleCount} | Size: ${(content.length / 1024).toFixed(1)} KB
+            Policy: <strong>${escapeHtml(policyName)}</strong> | Rules: ${ruleCount} | Size: ${(content.length / 1024).toFixed(1)} KB
           </div>
         </div>
       </div>
       <div style="display: flex; gap: 6px;">
-        <button class="btn btn-sm btn-primary" onclick="window.confirmStagedUpload()">Upload to Host Daemon</button>
+        <button class="btn btn-sm btn-primary" onclick="window.confirmStagedUpload()">Upload to Host</button>
         <button class="btn btn-sm" onclick="window.cancelStagedUpload()">Cancel</button>
       </div>
     </div>
@@ -333,14 +333,14 @@ export function lintEditorYaml() {
 
   if (/^\t+/m.test(content)) {
     badge.className = "badge badge-red";
-    badge.innerText = "✕ Tabs used for indentation (spaces required)";
+    badge.innerText = "SYNTAX ERROR: Tabs used for indentation";
     return;
   }
 
   const hasName = /^name\s*:\s*(\S+)/m.test(content);
   if (!hasName) {
     badge.className = "badge badge-amber";
-    badge.innerText = "⚠ Missing 'name:' field";
+    badge.innerText = "SCHEMA WARNING: Missing 'name:' field";
     return;
   }
 
@@ -366,13 +366,13 @@ export function lintEditorYaml() {
 
   if (foundDangerous && guardrailsDisabled) {
     badge.className = "badge badge-red";
-    badge.innerText = "✕ Dangerous commands with guardrails disabled!";
+    badge.innerText = "SECURITY RISK: Guardrails disabled with destructive commands";
   } else if (foundDangerous) {
     badge.className = "badge badge-amber";
-    badge.innerText = `⚠ ${ruleCount} rules (High-risk commands detected)`;
+    badge.innerText = `SECURITY NOTICE: ${ruleCount} rules (High-risk commands detected)`;
   } else {
     badge.className = "badge badge-green";
-    badge.innerText = `✓ Valid Policy (${ruleCount} allow rules)`;
+    badge.innerText = `VALID SCHEMA (${ruleCount} allow rules)`;
   }
 }
 

@@ -63,8 +63,26 @@ struct DaemonConfigFile {
 impl AgentGateConfig {
     /// Load config, creating directories if needed
     pub fn load() -> Result<Self> {
-        let config_dir = Self::get_config_dir()?;
-        let config_file = config_dir.join("config.yaml");
+        Self::load_with_path(None)
+    }
+
+    /// Load config with optional custom config path or directory
+    pub fn load_with_path(custom_path: Option<&std::path::Path>) -> Result<Self> {
+        let (config_dir, config_file) = if let Some(path) = custom_path {
+            if path.is_dir() {
+                (path.to_path_buf(), path.join("config.yaml"))
+            } else {
+                let dir = path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .to_path_buf();
+                (dir, path.to_path_buf())
+            }
+        } else {
+            let dir = Self::get_config_dir()?;
+            let file = dir.join("config.yaml");
+            (dir, file)
+        };
         let client_file = config_dir.join("client.yaml");
 
         let mut listen_addr = "127.0.0.1".to_string();
@@ -227,6 +245,9 @@ impl AgentGateConfig {
 
     /// Determine the base configuration directory based on effective UID
     fn get_config_dir() -> Result<PathBuf> {
+        if let Ok(dir) = std::env::var("AGENTGATE_CONFIG_DIR") {
+            return Ok(PathBuf::from(dir));
+        }
         if Self::is_root() {
             Ok(PathBuf::from("/etc/agentgate"))
         } else {

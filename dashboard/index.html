@@ -3,108 +3,135 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AgentGate Control Center</title>
+  <title>AgentGate Console — Host Security &amp; Policy Control Plane</title>
   <link rel="stylesheet" href="css/style.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23388bfd' stroke-width='2'><path d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/></svg>">
 </head>
 <body>
 
-  <!-- Top Header Navigation -->
+  <!-- Top System Header -->
   <header>
     <div class="brand">
-      <span class="brand-logo">🛡️</span>
-      <span class="brand-title">AgentGate</span>
+      <svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span class="brand-title">AGENTGATE</span>
       <span class="brand-pill" id="dashboardVersionPill">v0.2.0</span>
-      <span class="brand-pill">DETACHED CONTROL PLANE</span>
+      <span class="brand-tag">CONTROL PLANE</span>
       <span class="badge badge-green" id="systemStateBadge">INITIALIZING</span>
     </div>
 
     <div class="header-status">
-      <!-- Connection Pill -->
-      <div class="conn-badge" id="connPill" onclick="window.openModal('connectionModal')">
+      <!-- Connection Status Indicator -->
+      <div class="conn-badge" id="connPill" onclick="window.openModal('connectionModal')" title="Click to edit daemon connection profile">
         <span class="conn-dot" id="connDot"></span>
         <span id="connLabel">Connecting...</span>
       </div>
 
-      <!-- Quick Actions -->
+      <!-- Quick Operations -->
       <div class="header-quick-actions">
-        <button class="btn btn-sm btn-warning" id="lockdownBtn" onclick="window.toggleLockdown()">
-          <span>🔒</span><span id="lockdownBtnText">Lockdown</span>
+        <button class="btn btn-sm btn-warning" id="lockdownBtn" onclick="window.toggleLockdown()" title="Instantly freeze all agent executions">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+          <span id="lockdownBtnText">Lockdown</span>
         </button>
-        <button class="btn btn-sm" onclick="window.restartDaemon()">
-          <span>🔄</span><span>Restart Host</span>
+        <button class="btn btn-sm" onclick="window.restartDaemon()" title="Send restart signal to remote daemon process">
+          <svg class="icon" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          <span>Restart Host</span>
         </button>
       </div>
     </div>
   </header>
 
-  <!-- Sub Navigation Bar -->
+  <!-- Navigation Tab Bar -->
   <nav class="nav-bar">
     <div class="tabs">
       <button class="tab-btn active" data-tab="overview" onclick="window.switchTab('overview')">
-        <span>📊</span> Overview
+        <svg class="icon" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Overview
       </button>
       <button class="tab-btn" data-tab="policies" onclick="window.switchTab('policies')">
-        <span>🛡️</span> Policies &amp; File Upload
+        <svg class="icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Policies &amp; Upload
       </button>
       <button class="tab-btn" data-tab="ai" onclick="window.switchTab('ai')">
-        <span>🤖</span> AI Policy Architect
+        <svg class="icon" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        Policy Generator
       </button>
       <button class="tab-btn" data-tab="tokens" onclick="window.switchTab('tokens')">
-        <span>🔑</span> Access Tokens
+        <svg class="icon" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+        Tokens &amp; Sudoers
       </button>
       <button class="tab-btn" data-tab="audit" onclick="window.switchTab('audit')">
-        <span>📜</span> Audit Telemetry
+        <svg class="icon" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        Live Audit Stream
       </button>
       <button class="tab-btn" data-tab="console" onclick="window.switchTab('console')">
-        <span>💻</span> Direct Dispatch
+        <svg class="icon" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        Direct Dispatch
       </button>
     </div>
-    <div>
+    <div style="display: flex; align-items: center; gap: 8px;">
       <button class="btn btn-sm" onclick="window.openAiSettingsModal()">
-        <span>⚙️</span> AI Provider Settings
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Model Config
       </button>
     </div>
   </nav>
 
-  <!-- Main Body Content -->
+  <!-- Main Content Body -->
   <main>
 
     <!-- TAB 1: Overview & Metrics -->
     <section id="tab-overview" class="tab-pane active">
-      <!-- KPI Metrics Grid -->
+      <!-- High-Density Telemetry Metrics -->
       <div class="grid-kpi">
         <div class="kpi-card">
-          <div class="kpi-label">Daemon Uptime <span>⏱️</span></div>
+          <div class="kpi-label">
+            <span>Daemon Uptime</span>
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
           <div class="kpi-value" id="metricUptime">--:--:--</div>
-          <div class="kpi-sub">Remote process heartbeat</div>
+          <div class="kpi-sub">Continuous host process runtime</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Active Processes <span>⚡</span></div>
+          <div class="kpi-label">
+            <span>Active Processes</span>
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </div>
           <div class="kpi-value" id="metricActiveProcs">0</div>
-          <div class="kpi-sub">Currently running on host</div>
+          <div class="kpi-sub">Processes currently executing on host</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Allowed Commands <span>✅</span></div>
-          <div class="kpi-value" id="metricAllowed" style="color: var(--color-green);">0</div>
-          <div class="kpi-sub">Verified via policy allowlist</div>
+          <div class="kpi-label">
+            <span>Allowed Executions</span>
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <div class="kpi-value color-green" id="metricAllowed">0</div>
+          <div class="kpi-sub">Passed policy allowlist evaluation</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Denied / Blocked <span>🛡️</span></div>
-          <div class="kpi-value" style="color: var(--color-red);">
+          <div class="kpi-label">
+            <span>Denied / Blocked</span>
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          </div>
+          <div class="kpi-value color-red">
             <span id="metricDenied">0</span> / <span id="metricBlocked">0</span>
           </div>
-          <div class="kpi-sub">Policy deny &amp; injection blocks</div>
+          <div class="kpi-sub">Policy rejection / injection blocks</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Configured Policies <span>📜</span></div>
+          <div class="kpi-label">
+            <span>Loaded Policies</span>
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+          </div>
           <div class="kpi-value" id="metricPolicies">0</div>
-          <div class="kpi-sub">Loaded in host daemon</div>
+          <div class="kpi-sub">Active rule definitions in memory</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Active Tokens <span>🔑</span></div>
+          <div class="kpi-label">
+            <span>Issued Tokens</span>
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777z"/></svg>
+          </div>
           <div class="kpi-value" id="metricTokens">0</div>
-          <div class="kpi-sub">Scoped agent credentials</div>
+          <div class="kpi-sub">Authenticated client identities</div>
         </div>
       </div>
 
@@ -112,7 +139,8 @@
       <div class="card">
         <div class="card-header">
           <div class="card-title">
-            <span>⚡</span> Active Host Executions
+            <svg class="icon" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Active Host Executions
           </div>
           <button class="btn btn-sm" onclick="window.switchTab('overview')">Refresh</button>
         </div>
@@ -131,8 +159,8 @@
             </thead>
             <tbody id="executionsTableBody">
               <tr>
-                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
-                  No active processes running on host.
+                <td colspan="7" class="empty-cell">
+                  No active processes executing on host.
                 </td>
               </tr>
             </tbody>
@@ -141,105 +169,161 @@
       </div>
     </section>
 
-    <!-- TAB 2: Policy Manager & Drag-Drop Uploader -->
+    <!-- TAB 2: Split-Pane Policy Manager & Drag-Drop Uploader -->
     <section id="tab-policies" class="tab-pane">
-      <!-- Drag & Drop Upload Zone (ChatGPT-style photo/file drop) -->
-      <div class="dropzone-container" id="policyDropZone" onclick="document.getElementById('policyFileInput').click()">
-        <input type="file" id="policyFileInput" accept=".yaml,.yml" style="display: none;">
-        <div class="dropzone-icon">📥</div>
-        <div class="dropzone-title">Drop your policy .yaml file here, or click to browse</div>
-        <div class="dropzone-desc">Drag any policy directly from your computer into this window to upload to the server.</div>
+      <div class="policy-workspace-layout">
+        
+        <!-- Left Pane: Dropzone & File Browser (320px) -->
+        <div class="policy-sidebar">
+          
+          <!-- Drag & Drop Upload Zone -->
+          <div class="dropzone-container" id="policyDropZone" onclick="document.getElementById('policyFileInput').click()">
+            <input type="file" id="policyFileInput" accept=".yaml,.yml" style="display: none;">
+            <div class="dropzone-icon">
+              <svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <div class="dropzone-title">Upload Local Policy (.yaml)</div>
+            <div class="dropzone-desc">Drag file from PC or click to browse</div>
+          </div>
+
+          <!-- Staged Policy Notification (Appears on drop) -->
+          <div id="stagedPolicyContainer" style="display: none;"></div>
+
+          <!-- Policy File Tree & Cards -->
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-header">
+              <div class="card-title">
+                <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                Daemon Policies
+              </div>
+              <button class="btn btn-sm" onclick="window.selectPolicyForEdit('policies/new-policy.yaml')">+ New</button>
+            </div>
+            <div class="card-body" style="padding: 6px;" id="filesTreeList">
+              <div style="color: var(--text-muted); padding: 10px; font-size: 11px;">Loading daemon policies...</div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Right Pane: Active Monospace Policy Editor -->
+        <div class="policy-editor-pane">
+          <div class="card" id="policyEditorCard" style="height: 100%; display: flex; flex-direction: column;">
+            <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
+              <div class="card-title" style="flex: 1; min-width: 200px;">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                <span id="editorFilePath" style="font-family: var(--font-mono); font-size: 12px; color: var(--color-blue);">Select or drop a policy to inspect</span>
+                <span id="editorLinterBadge" class="badge badge-slate" style="display: none;"></span>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <button class="btn btn-sm" id="editorExportBtn" style="display: none;" onclick="window.exportPolicyToPc()">
+                  <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Export to PC
+                </button>
+                <button class="btn btn-sm btn-danger" id="editorDeleteBtn" style="display: none;" onclick="window.deleteActivePolicy()">
+                  <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                  Delete
+                </button>
+                <button class="btn btn-sm btn-success" id="editorSaveBtn" style="display: none;" onclick="window.saveEditorFile()">
+                  <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                  Save to Daemon
+                </button>
+              </div>
+            </div>
+            <div class="card-body" style="padding: 0; flex: 1; display: flex; flex-direction: column;">
+              <textarea id="policyEditorTextarea" oninput="window.lintEditorYaml()" spellcheck="false"
+                        class="code-editor-area"
+                        placeholder="# Policy YAML content will appear here..."></textarea>
+            </div>
+          </div>
+        </div>
+
       </div>
 
-      <!-- Staged Policy Card (appears upon file drop) -->
-      <div id="stagedPolicyContainer" style="display: none; margin-bottom: 16px;"></div>
-
-      <!-- Active Loaded Policies Grid -->
-      <div style="margin-bottom: 16px;">
-        <h3 style="font-size: 13px; font-weight: 600; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px;">
-          Active Policies on Daemon
-        </h3>
-        <div id="policyCardsGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px;">
+      <!-- Overview Cards Grid (Loaded Policies Breakdown) -->
+      <div style="margin-top: 18px;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; letter-spacing: 0.05em;">
+          Active Loaded Rulesets
+        </div>
+        <div id="policyCardsGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px;">
           <!-- Loaded via policies.js -->
-        </div>
-      </div>
-
-      <!-- Visual & Code Policy Editor -->
-      <div class="card" id="policyEditorCard">
-        <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
-          <div class="card-title">
-            <span>📝</span>
-            <span id="editorFilePath" style="font-family: var(--font-mono); color: var(--color-blue);">Select a policy above to view or edit</span>
-            <span id="editorLinterBadge" class="badge badge-slate" style="display: none;"></span>
-          </div>
-          <div style="display: flex; gap: 6px;">
-            <button class="btn btn-sm" id="editorExportBtn" style="display: none;" onclick="window.exportPolicyToPc()">📤 Export to PC</button>
-            <button class="btn btn-sm btn-danger" id="editorDeleteBtn" style="display: none;" onclick="window.deleteActivePolicy()">Delete</button>
-            <button class="btn btn-sm btn-success" id="editorSaveBtn" style="display: none;" onclick="window.saveEditorFile()">Save to Host</button>
-          </div>
-        </div>
-        <div class="card-body" style="padding: 0;">
-          <textarea id="policyEditorTextarea" oninput="window.lintEditorYaml()" spellcheck="false"
-                    style="width: 100%; height: 380px; background: #040608; color: #7ee787; border: none; font-family: var(--font-mono); font-size: 12px; padding: 14px; line-height: 1.6; resize: vertical; outline: none;"
-                    placeholder="Policy content will appear here..."></textarea>
         </div>
       </div>
     </section>
 
-    <!-- TAB 3: AI Policy Architect (LLM Chat) -->
+    <!-- TAB 3: Policy Generator Studio (Structured Engineering Synthesizer) -->
     <section id="tab-ai" class="tab-pane">
-      <div class="ai-layout">
-        <!-- Left: Quick Templates & Controls -->
-        <div class="ai-sidebar">
-          <div class="card" style="margin-bottom: 0;">
+      <div class="studio-layout">
+        
+        <!-- Left: Prompt & Configuration Panel (40%) -->
+        <div class="studio-controls">
+          <div class="card">
             <div class="card-header">
-              <div class="card-title"><span>💡</span> Preset Prompts</div>
-            </div>
-            <div class="card-body" style="display: flex; flex-direction: column; gap: 8px;">
-              <button class="btn btn-sm" style="text-align: left; justify-content: flex-start;"
-                      onclick="document.getElementById('aiChatInput').value = 'Create a Docker operations policy that allows docker ps, docker logs, and docker restart webapp, but denies all rm, prune, and volume wipe commands.';">
-                🐳 Docker Ops Agent
-              </button>
-              <button class="btn btn-sm" style="text-align: left; justify-content: flex-start;"
-                      onclick="document.getElementById('aiChatInput').value = 'Create a Python web scraper policy that permits curl and running python3 in /tmp, but blocks all sudo, chmod, and systemctl commands.';">
-                🐍 Python Scraper Agent
-              </button>
-              <button class="btn btn-sm" style="text-align: left; justify-content: flex-start;"
-                      onclick="document.getElementById('aiChatInput').value = 'Create a strict read-only diagnostic policy allowing uptime, df -h, free -m, ps aux, and systemctl status, with zero write permissions.';">
-                🔍 Read-Only Diagnostics
-              </button>
-              <button class="btn btn-sm" style="text-align: left; justify-content: flex-start;"
-                      onclick="document.getElementById('aiChatInput').value = 'Create a CI/CD automation pipeline policy with a named action deploy that runs git pull and systemctl reload nginx, with arbitrary exec disabled.';">
-                🚀 CI/CD Action Pipeline
-              </button>
-            </div>
-          </div>
-
-          <div class="card" style="margin-bottom: 0;">
-            <div class="card-header">
-              <div class="card-title"><span>⚙️</span> Provider Status</div>
+              <div class="card-title">
+                <svg class="icon" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                Policy Rule Specification
+              </div>
             </div>
             <div class="card-body">
-              <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
-                Policies generated here can be copied or deployed to your daemon with 1 click.
-              </p>
-              <button class="btn btn-sm btn-primary" style="width: 100%;" onclick="window.openAiSettingsModal()">
-                Configure LLM API Key
-              </button>
+              <form id="aiChatForm">
+                <div class="form-group">
+                  <label class="form-label">Operational Requirements &amp; Boundary</label>
+                  <textarea id="aiChatInput" class="form-control" rows="5"
+                            placeholder="Describe allowed binaries, directory boundaries, and security rules:&#10;e.g., Allow docker inspect, docker logs, and systemctl reload nginx. Deny sudo bash, rm -rf, and arbitrary interpreter executions." required></textarea>
+                </div>
+
+                <div style="margin-bottom: 12px;">
+                  <label class="form-label">Reference Templates</label>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                    <button type="button" class="btn btn-sm preset-btn"
+                            onclick="document.getElementById('aiChatInput').value = 'Create a Docker operations policy: allow docker ps, docker logs, and docker restart webapp, but deny all rm, prune, and volume wipe commands.';">
+                      Docker Operator
+                    </button>
+                    <button type="button" class="btn btn-sm preset-btn"
+                            onclick="document.getElementById('aiChatInput').value = 'Create a Python worker policy: allow python3 execution in /srv/worker, curl, and git status. Deny root access, chmod, and systemctl.';">
+                      Python Worker
+                    </button>
+                    <button type="button" class="btn btn-sm preset-btn"
+                            onclick="document.getElementById('aiChatInput').value = 'Create a read-only diagnostics policy: allow uptime, df -h, free -m, ps aux, and systemctl status. Zero write or modification permissions.';">
+                      Read-Only Diagnostics
+                    </button>
+                    <button type="button" class="btn btn-sm preset-btn"
+                            onclick="document.getElementById('aiChatInput').value = 'Create a CI/CD action pipeline policy with a named action deploy that runs git pull --ff-only and systemctl reload app.service.';">
+                      CI/CD Action Pipeline
+                    </button>
+                  </div>
+                </div>
+
+                <div style="display: flex; gap: 8px; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-muted); padding-top: 12px;">
+                  <button type="button" class="btn btn-sm" onclick="window.openAiSettingsModal()">
+                    <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    Provider
+                  </button>
+                  <button type="submit" class="btn btn-primary" id="aiSendBtn">
+                    <svg class="icon icon-sm" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    Synthesize Policy
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </div>
 
-        <!-- Right: Conversational Chat Stream -->
-        <div class="ai-chat-area">
-          <div class="ai-messages" id="aiMessagesContainer">
-            <!-- Messages rendered via ai-assistant.js -->
+        <!-- Right: Synthesized YAML Output & History (60%) -->
+        <div class="studio-output">
+          <div class="card" style="height: 100%; display: flex; flex-direction: column;">
+            <div class="card-header">
+              <div class="card-title">
+                <svg class="icon" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                Generated Policy Review
+              </div>
+              <button class="btn btn-sm" onclick="document.getElementById('aiMessagesContainer').innerHTML = '';">Clear</button>
+            </div>
+            <div class="card-body" style="flex: 1; overflow-y: auto; padding: 14px;" id="aiMessagesContainer">
+              <!-- Content rendered via ai-assistant.js -->
+            </div>
           </div>
-          <form class="ai-input-bar" id="aiChatForm">
-            <input type="text" id="aiChatInput" class="form-control" placeholder="Describe the agent permissions you need (e.g. 'Allow git and build tools in /srv/repo, block root access')..." required autocomplete="off">
-            <button type="submit" class="btn btn-primary" id="aiSendBtn">Send</button>
-          </form>
         </div>
+
       </div>
     </section>
 
@@ -248,21 +332,25 @@
       <div class="card">
         <div class="card-header">
           <div class="card-title">
-            <span>🔑</span> Configured Agent Access Tokens
+            <svg class="icon" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+            Configured Agent Access Tokens
           </div>
-          <button class="btn btn-sm btn-primary" onclick="window.openModal('createTokenModal')">+ Issue New Token</button>
+          <button class="btn btn-sm btn-primary" onclick="window.openModal('createTokenModal')">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Issue New Token
+          </button>
         </div>
         <div class="card-body" style="padding: 0; overflow-x: auto;">
           <table>
             <thead>
               <tr>
-                <th>Token Name</th>
-                <th>Policy</th>
-                <th>OS User</th>
-                <th>Tier</th>
-                <th>Created</th>
+                <th>Token Identifier</th>
+                <th>Assigned Policy</th>
+                <th>Isolated User</th>
+                <th>Security Tier</th>
+                <th>Issued</th>
                 <th>Expires</th>
-                <th>Last Used</th>
+                <th>Last Activity</th>
                 <th style="text-align: right;">Action</th>
               </tr>
             </thead>
@@ -280,16 +368,18 @@
         <div class="terminal-header">
           <div style="display: flex; align-items: center; gap: 8px;">
             <span class="badge badge-green">LIVE SSE STREAM</span>
-            <span style="color: var(--text-secondary); font-size: 11px;">Real-Time Command Telemetry</span>
+            <span style="color: var(--text-secondary); font-size: 11px; font-family: var(--font-mono);">
+              /v1/events
+            </span>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
-            <select id="logFilterSelect" class="form-control" style="width: auto; padding: 2px 6px; font-size: 11px;">
+            <select id="logFilterSelect" class="form-control" style="width: auto; padding: 2px 8px; font-size: 11px;">
               <option value="all">Filter: All Events</option>
-              <option value="allowed">Allowed Only</option>
-              <option value="denied">Denied Only</option>
-              <option value="blocked">Blocked Injection Only</option>
+              <option value="allowed">Allowed Executions</option>
+              <option value="denied">Policy Denials</option>
+              <option value="blocked">Blocked Injections</option>
             </select>
-            <input type="text" id="logSearchInput" class="form-control" placeholder="Search command / token..." style="width: 160px; padding: 2px 6px; font-size: 11px;">
+            <input type="text" id="logSearchInput" class="form-control" placeholder="Search command / token..." style="width: 180px; padding: 2px 8px; font-size: 11px;">
             <button class="btn btn-sm" onclick="document.getElementById('terminalStream').innerHTML = '';">Clear</button>
           </div>
         </div>
@@ -305,23 +395,29 @@
     <section id="tab-console" class="tab-pane">
       <div class="card">
         <div class="card-header">
-          <div class="card-title"><span>💻</span> Direct Command Dispatcher</div>
+          <div class="card-title">
+            <svg class="icon" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            Direct Execution Dispatcher
+          </div>
         </div>
         <div class="card-body">
           <div class="form-group">
-            <label class="form-label">Command to execute on host</label>
+            <label class="form-label">Command to execute through daemon security engine</label>
             <div style="display: flex; gap: 8px;">
-              <input type="text" id="consoleCmdInput" class="form-control" placeholder="e.g. uptime or df -h">
-              <button class="btn btn-primary" onclick="window.runConsoleCmd()">Execute</button>
+              <input type="text" id="consoleCmdInput" class="form-control" placeholder="e.g. systemctl status nginx or uptime">
+              <button class="btn btn-primary" onclick="window.runConsoleCmd()">
+                <svg class="icon icon-sm" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Execute
+              </button>
             </div>
           </div>
           <div class="form-group">
             <label class="form-label">Working Directory (optional)</label>
-            <input type="text" id="consoleCwdInput" class="form-control" placeholder="e.g. /var/log">
+            <input type="text" id="consoleCwdInput" class="form-control" placeholder="e.g. /srv/app">
           </div>
           <div style="margin-top: 14px;">
-            <label class="form-label">Execution Result</label>
-            <pre id="consoleOutput" style="background: #040608; border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 12px; font-family: var(--font-mono); font-size: 12px; min-height: 220px; max-height: 500px; overflow-y: auto; color: #fff; white-space: pre-wrap; word-break: break-all;">Awaiting command execution...</pre>
+            <label class="form-label">Output &amp; Exit Status</label>
+            <pre id="consoleOutput" class="console-box">Awaiting command execution...</pre>
           </div>
         </div>
       </div>
@@ -335,23 +431,26 @@
   <div class="modal-backdrop" id="connectionModal">
     <div class="modal-card">
       <div class="modal-header">
-        <div class="modal-title">🔗 Connect to AgentGate Daemon</div>
+        <div class="modal-title">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+          Connect to AgentGate Daemon
+        </div>
         <button class="btn btn-sm" onclick="window.closeModal('connectionModal')">✕</button>
       </div>
       <form id="connectionForm">
         <div class="modal-body">
           <p style="color: var(--text-secondary); font-size: 12px; margin-bottom: 12px;">
-            Enter your remote or local AgentGate daemon host URL and an admin bearer token.
+            Specify the network URL and admin token of the target daemon. Credentials are stored securely in local storage.
           </p>
           <div class="form-group">
             <label class="form-label">Daemon Host URL</label>
-            <input type="text" id="connHostInput" class="form-control" placeholder="http://127.0.0.1:7991 or https://192.168.1.150:7991" required>
+            <input type="text" id="connHostInput" class="form-control" placeholder="http://127.0.0.1:7991 or https://10.0.0.5:7991" required>
           </div>
           <div class="form-group">
             <label class="form-label">Dashboard Admin Token</label>
             <input type="password" id="connTokenInput" class="form-control" placeholder="ag_..." required>
-            <small style="color: var(--text-muted); font-size: 10px;">
-              Generate on server using: <code>agentgated dashboard-token</code>
+            <small style="color: var(--text-muted); font-size: 11px;">
+              Generate on daemon host: <code>sudo agentgated dashboard-token</code>
             </small>
           </div>
         </div>
@@ -367,14 +466,17 @@
   <div class="modal-backdrop" id="createTokenModal">
     <div class="modal-card">
       <div class="modal-header">
-        <div class="modal-title">🔑 Issue New Agent Token</div>
+        <div class="modal-title">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777z"/></svg>
+          Issue Scoped Agent Token
+        </div>
         <button class="btn btn-sm" onclick="window.closeModal('createTokenModal')">✕</button>
       </div>
       <form id="createTokenForm">
         <div class="modal-body">
           <div class="form-group">
             <label class="form-label">Token Name</label>
-            <input type="text" id="newTokenName" class="form-control" placeholder="e.g. claude-code or docker-ops" required>
+            <input type="text" id="newTokenName" class="form-control" placeholder="e.g. cicd-deployer or claude-code" required>
           </div>
           <div class="form-group">
             <label class="form-label">Assigned Policy</label>
@@ -396,12 +498,12 @@
             <input type="text" id="newTokenOsUser" class="form-control" placeholder="e.g. ag-agent (drops privileges to this system user)">
           </div>
           <div class="form-group">
-            <label class="form-label">Expiration</label>
+            <label class="form-label">Lifetime Expiration</label>
             <select id="newTokenExpiry" class="form-control">
-              <option value="0">Never Expires</option>
-              <option value="1">1 Day</option>
-              <option value="7" selected>7 Days</option>
-              <option value="30">30 Days</option>
+              <option value="24h">24 Hours</option>
+              <option value="7d">7 Days</option>
+              <option value="30d">30 Days</option>
+              <option value="never">Never (Persistent)</option>
             </select>
           </div>
         </div>
@@ -413,56 +515,66 @@
     </div>
   </div>
 
-  <!-- Token Result Modal -->
-  <div class="modal-backdrop" id="tokenResultModal">
+  <!-- Token Display Modal (Upon Creation) -->
+  <div class="modal-backdrop" id="tokenCreatedModal">
     <div class="modal-card">
       <div class="modal-header">
-        <div class="modal-title" style="color: var(--color-green);">✓ Token Created Successfully</div>
-        <button class="btn btn-sm" onclick="window.closeModal('tokenResultModal')">✕</button>
+        <div class="modal-title">Token Successfully Issued</div>
+        <button class="btn btn-sm" onclick="window.closeModal('tokenCreatedModal')">✕</button>
       </div>
       <div class="modal-body">
-        <p style="color: var(--text-secondary); font-size: 12px; margin-bottom: 10px;">
-          Copy this token now. For security, it is hashed on the server and cannot be viewed again.
+        <p style="color: var(--text-secondary); font-size: 12px; margin-bottom: 12px;">
+          Copy this token now. For security, the secret cannot be retrieved from the server again.
         </p>
-        <pre id="generatedTokenDisplay" style="background: #040608; border: 1px solid var(--border-default); padding: 10px; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 12px; word-break: break-all; color: var(--color-blue); margin-bottom: 10px;"></pre>
+        <div class="form-group">
+          <label class="form-label">Bearer Token</label>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="createdTokenDisplay" class="form-control" readonly style="font-family: var(--font-mono); font-size: 11px; background: #06090e;">
+            <button class="btn" onclick="window.copyCreatedToken()">Copy</button>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-primary" onclick="window.copyGeneratedToken()">Copy Token</button>
-        <button class="btn" onclick="window.closeModal('tokenResultModal')">Close</button>
+        <button type="button" class="btn btn-primary" onclick="window.closeModal('tokenCreatedModal')">Done</button>
       </div>
     </div>
   </div>
 
-  <!-- AI Settings Modal -->
+  <!-- Model Settings Modal -->
   <div class="modal-backdrop" id="aiSettingsModal">
     <div class="modal-card">
       <div class="modal-header">
-        <div class="modal-title">🤖 AI Policy Architect Settings</div>
+        <div class="modal-title">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          LLM Provider Configuration
+        </div>
         <button class="btn btn-sm" onclick="window.closeModal('aiSettingsModal')">✕</button>
       </div>
       <form id="aiSettingsForm">
         <div class="modal-body">
+          <p style="color: var(--text-secondary); font-size: 12px; margin-bottom: 12px;">
+            Connect your preferred provider to generate policies from natural language. Keys are kept strictly in browser local storage.
+          </p>
           <div class="form-group">
-            <label class="form-label">LLM Provider</label>
-            <select id="aiProviderSelect" class="form-control">
-              <option value="openai">OpenAI (ChatGPT)</option>
-              <option value="anthropic">Anthropic (Claude)</option>
-              <option value="gemini">Google Gemini</option>
-              <option value="groq">Groq (Ultra-fast Llama 3.3)</option>
-              <option value="ollama">Local Ollama / Custom API</option>
+            <label class="form-label">Provider</label>
+            <select id="aiProviderSelect" class="form-control" onchange="window.handleProviderChange()">
+              <option value="gemini">Google Gemini (Gemini 2.0 / 1.5)</option>
+              <option value="anthropic">Anthropic (Claude 3.5 Sonnet)</option>
+              <option value="openai">OpenAI (GPT-4o / GPT-4o-mini)</option>
+              <option value="groq">Groq (Llama 3.3 70B)</option>
+              <option value="ollama">Local Ollama (Offline / Private)</option>
             </select>
           </div>
-          <div class="form-group">
+          <div class="form-group" id="aiApiKeyGroup">
             <label class="form-label">API Key</label>
-            <input type="password" id="aiApiKeyInput" class="form-control" placeholder="sk-..." autocomplete="off">
-            <small style="color: var(--text-muted); font-size: 10px;">Stored only in your local browser storage. Never transmitted to third parties.</small>
+            <input type="password" id="aiApiKeyInput" class="form-control" placeholder="sk-...">
           </div>
           <div class="form-group">
-            <label class="form-label">Model Name</label>
-            <input type="text" id="aiModelInput" class="form-control" placeholder="e.g. gpt-4o-mini, claude-3-5-sonnet, gemini-2.0-flash">
+            <label class="form-label">Model Identifier</label>
+            <input type="text" id="aiModelInput" class="form-control" placeholder="gemini-2.0-flash">
           </div>
-          <div class="form-group">
-            <label class="form-label">Endpoint URL (for Ollama / Custom)</label>
+          <div class="form-group" id="aiEndpointGroup" style="display: none;">
+            <label class="form-label">Base URL Endpoint</label>
             <input type="text" id="aiEndpointInput" class="form-control" placeholder="http://localhost:11434/v1">
           </div>
         </div>
@@ -474,10 +586,11 @@
     </div>
   </div>
 
-  <!-- Toast Notification Center -->
-  <div id="toastContainer"></div>
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
 
-  <!-- Script Initializer -->
+  <!-- Core Scripts -->
   <script type="module" src="js/app.js"></script>
+
 </body>
 </html>

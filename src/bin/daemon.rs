@@ -14,6 +14,18 @@ use clap::{Parser, Subcommand};
     version = env!("CARGO_PKG_VERSION")
 )]
 pub struct DaemonCli {
+    /// Address to listen on (default: 127.0.0.1, or configured)
+    #[arg(long, global = true)]
+    pub listen: Option<String>,
+
+    /// Port to listen on (default: 7991, or configured)
+    #[arg(long, global = true)]
+    pub port: Option<u16>,
+
+    /// Path to custom configuration file or directory
+    #[arg(long, global = true)]
+    pub config: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     pub command: Option<DaemonCommands>,
 }
@@ -76,7 +88,14 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = DaemonCli::parse();
-    let mut config = AgentGateConfig::load()?;
+    let mut config = AgentGateConfig::load_with_path(cli.config.as_deref())?;
+
+    if let Some(l) = cli.listen {
+        config.listen_addr = l;
+    }
+    if let Some(p) = cli.port {
+        config.listen_port = p;
+    }
 
     match cli.command {
         Some(DaemonCommands::Init(args)) => {
@@ -168,9 +187,21 @@ async fn main() -> Result<()> {
             cli::handle_logs(args, &config)?;
         }
         None => {
-            use clap::CommandFactory;
-            let _ = DaemonCli::command().print_help();
-            println!();
+            let my_pid = std::process::id() as i32;
+            if let Some(existing_pid) = cli::read_pid(&config.pid_file).filter(|&p| p != my_pid) {
+                anyhow::bail!(
+                    "AgentGate Host Daemon is already running (PID: {}). Stop it first with: agentgated stop",
+                    existing_pid
+                );
+            }
+
+            let _ = std::fs::write(&config.pid_file, my_pid.to_string());
+            let has_tls = config.certs_dir.join("cert.pem").exists() && config.certs_dir.join("key.pem").exists();
+            let res = server::run_server(&config, None, None, has_tls).await;
+            if cli::read_pid(&config.pid_file) == Some(my_pid) {
+                let _ = std::fs::remove_file(&config.pid_file);
+            }
+            res?;
         }
     }
 

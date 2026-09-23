@@ -223,7 +223,7 @@ export function showToast(message, isError = false) {
   if (isError) toast.style.borderColor = "var(--color-red)";
 
   toast.innerHTML = `
-    <span>${isError ? "⚠️" : "✓"}</span>
+    <span class="badge ${isError ? 'badge-red' : 'badge-green'}">${isError ? 'ERR' : 'OK'}</span>
     <span>${message}</span>
   `;
 
