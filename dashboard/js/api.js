@@ -98,6 +98,15 @@ export const api = {
     method: "POST",
     body: JSON.stringify({ command, ...(cwd ? { cwd } : {}) }),
   }),
+  verifyTotp: (code) => request("/v1/auth/totp", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  }),
+  getTotpSetup: () => request("/v1/auth/totp/setup"),
+  confirmTotpSetup: (secret, code) => request("/v1/auth/totp/setup", {
+    method: "POST",
+    body: JSON.stringify({ secret, code }),
+  }),
 };
 
 export function startSseStream(onAudit, onHeartbeat, onError) {

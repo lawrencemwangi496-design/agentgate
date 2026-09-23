@@ -28,6 +28,17 @@ window.loadAiYamlIntoEditor = loadAiYamlIntoEditor;
 window.deployAiYamlToServer = deployAiYamlToServer;
 window.openAiSettingsModal = () => openModal("aiSettingsModal");
 
+// Auth Gate Bindings
+window.switchAuthTab = switchAuthTab;
+window.submitTotpAuth = submitTotpAuth;
+window.submitTotpSetupConfirm = submitTotpSetupConfirm;
+window.submitTokenAuth = submitTokenAuth;
+window.copySetupSecretKey = copySetupSecretKey;
+window.logoutConsole = logoutConsole;
+window.submitSynthesizer = submitSynthesizer;
+
+let currentSetupSecret = "";
+
 document.addEventListener("DOMContentLoaded", () => {
   initApp();
 });
@@ -38,79 +49,270 @@ async function initApp() {
   initFormListeners();
   renderChatMessages();
 
-  // Load connection inputs from state
-  const hostInput = document.getElementById("connHostInput");
-  const tokenInput = document.getElementById("connTokenInput");
+  const hostInput = document.getElementById("authGateHost");
   if (hostInput) hostInput.value = state.host;
-  if (tokenInput) tokenInput.value = state.token;
 
-  // Auto connect if token exists
+  // If token is saved, try to validate and unlock console
   if (state.token) {
-    connectToDaemon();
+    tryUnlockWithExistingToken();
   } else {
-    updateConnectionUI(false, "Disconnected");
-    openModal("connectionModal");
+    showAuthGate();
   }
 }
 
-export async function connectToDaemon() {
-  const hostInput = document.getElementById("connHostInput");
-  const tokenInput = document.getElementById("connTokenInput");
+function showAuthGate() {
+  const gate = document.getElementById("authGate");
+  const app = document.getElementById("appWorkspace");
+  if (gate) gate.style.display = "flex";
+  if (app) app.style.display = "none";
+}
+
+function unlockConsole(statusData) {
+  const gate = document.getElementById("authGate");
+  const app = document.getElementById("appWorkspace");
+  if (gate) gate.style.display = "none";
+  if (app) app.style.display = "flex";
+
+  state.connected = true;
+  state.version = statusData.version || "0.2.0";
+  state.isLockdown = statusData.lockdown;
+
+  const versionEl = document.getElementById("dashboardVersionPill");
+  if (versionEl) versionEl.innerText = `v${state.version}`;
+
+  const hostLabel = document.getElementById("connLabel");
+  if (hostLabel) hostLabel.innerText = state.host.replace(/^https?:\/\//, "");
+
+  updateConnectionBadge(true);
+  showToast(`Authenticated to AgentGate Daemon v${state.version}`);
+
+  // Start Real-Time SSE Stream
+  startSseStream(
+    (entry) => handleAuditEntry(entry),
+    (heartbeat) => handleHeartbeat(heartbeat),
+    () => updateConnectionBadge(false)
+  );
+
+  // Initial Data Fetch
+  loadPoliciesAndFiles();
+  loadTokensList();
+  populateTokenPolicyOptions();
+}
+
+async function tryUnlockWithExistingToken() {
+  try {
+    const statusData = await api.getStatus();
+    unlockConsole(statusData);
+  } catch (err) {
+    console.warn("Existing token validation failed:", err);
+    state.token = "";
+    localStorage.removeItem("ag_token");
+    showAuthGate();
+    showAuthError("Session expired or invalid. Please authenticate.");
+  }
+}
+
+export function switchAuthTab(tab) {
+  ["totp", "setup", "token"].forEach(t => {
+    const btn = document.getElementById(`authTab${t.charAt(0).toUpperCase() + t.slice(1)}Btn`);
+    const panel = document.getElementById(`authPanel${t.charAt(0).toUpperCase() + t.slice(1)}`);
+    if (btn) btn.classList.toggle("active", t === tab);
+    if (panel) panel.style.display = (t === tab) ? "block" : "none";
+  });
+
+  clearAuthError();
+
+  if (tab === "setup") {
+    loadTotpSetupWizard();
+  } else if (tab === "totp") {
+    setTimeout(() => {
+      const input = document.getElementById("authTotpInput");
+      if (input) input.focus();
+    }, 50);
+  }
+}
+
+async function loadTotpSetupWizard() {
+  const hostInput = document.getElementById("authGateHost");
+  if (hostInput && hostInput.value.trim()) {
+    state.host = hostInput.value.trim().replace(/\/$/, "");
+  }
+
+  const loadingEl = document.getElementById("authSetupLoading");
+  const alreadyEl = document.getElementById("authSetupAlreadyConfigured");
+  const availEl = document.getElementById("authSetupAvailable");
+
+  if (loadingEl) loadingEl.style.display = "block";
+  if (alreadyEl) alreadyEl.style.display = "none";
+  if (availEl) availEl.style.display = "none";
+
+  try {
+    const data = await api.getTotpSetup();
+    currentSetupSecret = data.secret;
+    const textEl = document.getElementById("setupSecretText");
+    const uriBtn = document.getElementById("setupOtpauthUriBtn");
+    if (textEl) textEl.innerText = data.secret;
+    if (uriBtn) uriBtn.href = data.uri || "#";
+
+    if (loadingEl) loadingEl.style.display = "none";
+    if (availEl) availEl.style.display = "block";
+  } catch (err) {
+    if (loadingEl) loadingEl.style.display = "none";
+    if (err.data && err.data.error === "already_configured") {
+      if (alreadyEl) alreadyEl.style.display = "block";
+    } else {
+      showAuthError(`Setup query failed: ${err.message}`);
+    }
+  }
+}
+
+export async function submitTotpAuth(e) {
+  e.preventDefault();
+  clearAuthError();
+
+  const hostInput = document.getElementById("authGateHost");
+  const codeInput = document.getElementById("authTotpInput");
+  const submitBtn = document.getElementById("authTotpSubmitBtn");
 
   const host = hostInput ? hostInput.value.trim() : state.host;
-  const token = tokenInput ? tokenInput.value.trim() : state.token;
+  const code = codeInput ? codeInput.value.trim() : "";
+
+  if (!code || code.length !== 6) {
+    showAuthError("Please enter a valid 6-digit TOTP verification code.");
+    return;
+  }
+
+  setConnection(host, "");
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerText = "Verifying Code...";
+  }
+
+  try {
+    const authRes = await api.verifyTotp(code);
+    if (!authRes.token) {
+      throw new Error("No token returned by daemon");
+    }
+
+    setConnection(host, authRes.token);
+    const statusData = await api.getStatus();
+    unlockConsole(statusData);
+  } catch (err) {
+    if (err.data && err.data.error === "totp_not_configured") {
+      showAuthError("TOTP is not configured on this host. Run 'sudo agentgated totp setup' on the host, or click the 2FA Setup tab.");
+    } else if (err.data && err.data.error === "invalid_code") {
+      showAuthError("Invalid or expired 6-digit TOTP code. Check your authenticator app time skew.");
+    } else {
+      showAuthError(`Authentication failed: ${err.message}`);
+    }
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerText = "Verify Code & Unlock Console";
+    }
+  }
+}
+
+export async function submitTotpSetupConfirm(e) {
+  e.preventDefault();
+  clearAuthError();
+
+  const hostInput = document.getElementById("authGateHost");
+  const codeInput = document.getElementById("setupConfirmCodeInput");
+
+  const host = hostInput ? hostInput.value.trim() : state.host;
+  const code = codeInput ? codeInput.value.trim() : "";
+
+  if (!code || code.length !== 6) {
+    showAuthError("Please enter the 6-digit code from your authenticator app.");
+    return;
+  }
+
+  setConnection(host, "");
+
+  try {
+    const res = await api.confirmTotpSetup(currentSetupSecret, code);
+    if (!res.token) throw new Error("No session token received.");
+
+    setConnection(host, res.token);
+    const statusData = await api.getStatus();
+    unlockConsole(statusData);
+  } catch (err) {
+    showAuthError(`Setup confirmation failed: ${err.message}`);
+  }
+}
+
+export async function submitTokenAuth(e) {
+  e.preventDefault();
+  clearAuthError();
+
+  const hostInput = document.getElementById("authGateHost");
+  const tokenInput = document.getElementById("authTokenInput");
+
+  const host = hostInput ? hostInput.value.trim() : state.host;
+  const token = tokenInput ? tokenInput.value.trim() : "";
+
+  if (!token) {
+    showAuthError("Please enter an admin bearer token.");
+    return;
+  }
 
   setConnection(host, token);
-  updateConnectionUI(false, "Connecting...", "connecting");
 
   try {
     const statusData = await api.getStatus();
-    state.connected = true;
-    state.version = statusData.version || "0.1.9";
-    state.isLockdown = statusData.lockdown;
-
-    updateConnectionUI(true, `${state.host}`);
-    closeModal("connectionModal");
-    showToast(`Connected to AgentGate Daemon v${state.version}`);
-
-    // Start Real-Time SSE Stream
-    startSseStream(
-      (entry) => handleAuditEntry(entry),
-      (heartbeat) => handleHeartbeat(heartbeat),
-      () => updateConnectionUI(false, "Reconnecting...", "connecting")
-    );
-
-    // Initial Data Fetch
-    await Promise.all([
-      loadPoliciesAndFiles(),
-      loadTokensList(),
-    ]);
-
-    // Populate token policy select dropdown
-    populateTokenPolicyOptions();
+    unlockConsole(statusData);
   } catch (err) {
-    state.connected = false;
-    stopSseStream();
-    updateConnectionUI(false, "Offline / Auth Failed", "offline");
-    showToast(`Connection failed: ${err.message}`, true);
+    showAuthError(`Token authentication failed: ${err.message}`);
   }
 }
 
-function updateConnectionUI(isOnline, label, statusClass = null) {
-  const badge = document.getElementById("connPill");
+function showAuthError(msg) {
+  const el = document.getElementById("authGateError");
+  if (el) {
+    el.innerText = msg;
+    el.style.display = "block";
+  }
+}
+
+function clearAuthError() {
+  const el = document.getElementById("authGateError");
+  if (el) {
+    el.innerText = "";
+    el.style.display = "none";
+  }
+}
+
+export function copySetupSecretKey() {
+  if (currentSetupSecret) {
+    navigator.clipboard.writeText(currentSetupSecret);
+    showToast("Base32 secret key copied to clipboard.");
+  }
+}
+
+export function logoutConsole() {
+  stopSseStream();
+  state.token = "";
+  localStorage.removeItem("ag_token");
+  showAuthGate();
+  showToast("Console locked. Operator session cleared.");
+}
+
+function updateConnectionBadge(isOnline) {
   const dot = document.getElementById("connDot");
-  const labelEl = document.getElementById("connLabel");
+  const badge = document.getElementById("systemStateBadge");
 
   if (dot) {
-    dot.className = "conn-dot " + (statusClass || (isOnline ? "online" : "offline"));
+    dot.className = "conn-dot " + (isOnline ? "online" : "offline");
   }
-  if (labelEl) {
-    labelEl.innerText = label;
+  if (badge) {
+    badge.className = "badge " + (isOnline ? "badge-green" : "badge-red");
+    badge.innerText = isOnline ? "OPERATIONAL" : "OFFLINE";
   }
 }
 
 export function switchTab(tabId) {
-  document.querySelectorAll(".tab-btn").forEach(btn => {
+  document.querySelectorAll(".rail-btn").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.tab === tabId);
   });
 
@@ -118,12 +320,33 @@ export function switchTab(tabId) {
     pane.classList.toggle("active", pane.id === `tab-${tabId}`);
   });
 
+  const titleEl = document.getElementById("activeViewTitle");
+  if (titleEl) {
+    const titles = {
+      overview: "SYSTEM OVERVIEW",
+      processes: "ACTIVE HOST PROCESSES",
+      policies: "POLICY WORKSPACE & FILE MANAGER",
+      tokens: "ACCESS TOKENS & SECURITY TIERS",
+      audit: "LIVE SSE AUDIT TELEMETRY",
+      console: "DIRECT COMMAND DISPATCHER",
+    };
+    titleEl.innerText = titles[tabId] || tabId.toUpperCase();
+  }
+
   if (tabId === "policies") {
     loadPoliciesAndFiles();
   } else if (tabId === "tokens") {
     loadTokensList();
     populateTokenPolicyOptions();
+  } else if (tabId === "processes") {
+    loadProcessList();
   }
+}
+
+function loadProcessList() {
+  const body = document.getElementById("processesTableBody");
+  if (!body) return;
+  body.innerHTML = `<tr><td colspan="7" class="empty-cell">No active processes running on host.</td></tr>`;
 }
 
 function populateTokenPolicyOptions() {
@@ -137,71 +360,34 @@ function populateTokenPolicyOptions() {
   select.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join("");
 }
 
-function initFormListeners() {
-  // Connection Form
-  const connForm = document.getElementById("connectionForm");
-  if (connForm) {
-    connForm.addEventListener("submit", (e) => {
-      e.preventDefault();
-      connectToDaemon();
-    });
+export function submitSynthesizer(e) {
+  e.preventDefault();
+  const input = document.getElementById("aiChatInput");
+  if (input && input.value.trim()) {
+    sendChatMessage(input.value.trim());
   }
+}
 
-  // Token Form
+function initFormListeners() {
+  // Token creation form
   const tokenForm = document.getElementById("createTokenForm");
   if (tokenForm) {
     tokenForm.addEventListener("submit", handleCreateTokenSubmit);
   }
 
-  // AI Chat Form
-  const aiForm = document.getElementById("aiChatForm");
-  if (aiForm) {
-    aiForm.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const input = document.getElementById("aiChatInput");
-      if (input && input.value.trim()) {
-        sendChatMessage(input.value.trim());
-      }
-    });
-  }
-
-  // AI Settings Form
+  // Model settings form
   const aiSettingsForm = document.getElementById("aiSettingsForm");
   if (aiSettingsForm) {
     aiSettingsForm.addEventListener("submit", (e) => {
       e.preventDefault();
-      const prov = document.getElementById("aiProviderSelect").value;
-      const key = document.getElementById("aiApiKeyInput").value;
+      const provider = document.getElementById("aiProviderSelect").value;
+      const apiKey = document.getElementById("aiApiKeyInput").value;
       const model = document.getElementById("aiModelInput").value;
       const endpoint = document.getElementById("aiEndpointInput").value;
-      saveAiSettings(prov, key, model, endpoint);
+      saveAiSettings(provider, apiKey, model, endpoint);
       closeModal("aiSettingsModal");
     });
   }
-
-  // Terminal Filter and Search
-  const filterSelect = document.getElementById("logFilterSelect");
-  if (filterSelect) {
-    filterSelect.addEventListener("change", (e) => {
-      metrics.filter = e.target.value;
-      renderLogStream();
-    });
-  }
-
-  const searchInput = document.getElementById("logSearchInput");
-  if (searchInput) {
-    searchInput.addEventListener("input", (e) => {
-      metrics.searchQuery = e.target.value;
-      renderLogStream();
-    });
-  }
-}
-
-function renderLogStream() {
-  const container = document.getElementById("terminalStream");
-  if (!container) return;
-  container.innerHTML = "";
-  metrics.logs.forEach(entry => window.appendLogToDom(entry));
 }
 
 export function openModal(id) {
@@ -219,8 +405,7 @@ export function showToast(message, isError = false) {
   if (!container) return;
 
   const toast = document.createElement("div");
-  toast.className = "toast";
-  if (isError) toast.style.borderColor = "var(--color-red)";
+  toast.className = "toast" + (isError ? " toast-error" : "");
 
   toast.innerHTML = `
     <span class="badge ${isError ? 'badge-red' : 'badge-green'}">${isError ? 'ERR' : 'OK'}</span>
@@ -230,6 +415,6 @@ export function showToast(message, isError = false) {
   container.appendChild(toast);
   setTimeout(() => {
     toast.style.opacity = "0";
-    setTimeout(() => toast.remove(), 200);
+    setTimeout(() => toast.remove(), 150);
   }, 3500);
 }
