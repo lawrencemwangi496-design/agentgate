@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentGate Control Center</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+</head>
+<body>
+
+  <!-- Top Header Navigation -->
+  <header>
+    <div class="brand">
+      <span class="brand-logo">🛡️</span>
+      <span class="brand-title">AgentGate</span>
+      <span class="brand-pill" id="dashboardVersionPill">v0.2.0</span>
+      <span class="brand-pill">DETACHED CONTROL PLANE</span>
+      <span class="badge badge-green" id="systemStateBadge">INITIALIZING</span>
+    </div>
+
+    <div class="header-status">
+      <!-- Connection Pill -->
+      <div class="conn-badge" id="connPill" onclick="window.openModal('connectionModal')">
+        <span class="conn-dot" id="connDot"></span>
+        <span id="connLabel">Connecting...</span>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="header-quick-actions">
+        <button class="btn btn-sm btn-warning" id="lockdownBtn" onclick="window.toggleLockdown()">
+          <span>🔒</span><span id="lockdownBtnText">Lockdown</span>
+        </button>
+        <button class="btn btn-sm" onclick="window.restartDaemon()">
+          <span>🔄</span><span>Restart Host</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Sub Navigation Bar -->
+  <nav class="nav-bar">
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="overview" onclick="window.switchTab('overview')">
+        <span>📊</span> Overview
+      </button>
+      <button class="tab-btn" data-tab="policies" onclick="window.switchTab('policies')">
+        <span>🛡️</span> Policies &amp; File Upload
+      </button>
+      <button class="tab-btn" data-tab="ai" onclick="window.switchTab('ai')">
+        <span>🤖</span> AI Policy Architect
+      </button>
+      <button class="tab-btn" data-tab="tokens" onclick="window.switchTab('tokens')">
+        <span>🔑</span> Access Tokens
+      </button>
+      <button class="tab-btn" data-tab="audit" onclick="window.switchTab('audit')">
+        <span>📜</span> Audit Telemetry
+      </button>
+      <button class="tab-btn" data-tab="console" onclick="window.switchTab('console')">
+        <span>💻</span> Direct Dispatch
+      </button>
+    </div>
+    <div>
+      <button class="btn btn-sm" onclick="window.openAiSettingsModal()">
+        <span>⚙️</span> AI Provider Settings
+      </button>
+    </div>
+  </nav>
+
+  <!-- Main Body Content -->
+  <main>
+
+    <!-- TAB 1: Overview & Metrics -->
+    <section id="tab-overview" class="tab-pane active">
+      <!-- KPI Metrics Grid -->
+      <div class="grid-kpi">
+        <div class="kpi-card">
+          <div class="kpi-label">Daemon Uptime <span>⏱️</span></div>
+          <div class="kpi-value" id="metricUptime">--:--:--</div>
+          <div class="kpi-sub">Remote process heartbeat</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Active Processes <span>⚡</span></div>
+          <div class="kpi-value" id="metricActiveProcs">0</div>
+          <div class="kpi-sub">Currently running on host</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Allowed Commands <span>✅</span></div>
+          <div class="kpi-value" id="metricAllowed" style="color: var(--color-green);">0</div>
+          <div class="kpi-sub">Verified via policy allowlist</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Denied / Blocked <span>🛡️</span></div>
+          <div class="kpi-value" style="color: var(--color-red);">
+            <span id="metricDenied">0</span> / <span id="metricBlocked">0</span>
+          </div>
+          <div class="kpi-sub">Policy deny &amp; injection blocks</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Configured Policies <span>📜</span></div>
+          <div class="kpi-value" id="metricPolicies">0</div>
+          <div class="kpi-sub">Loaded in host daemon</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Active Tokens <span>🔑</span></div>
+          <div class="kpi-value" id="metricTokens">0</div>
+          <div class="kpi-sub">Scoped agent credentials</div>
+        </div>
+      </div>
+
+      <!-- Active Running Processes Card -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>⚡</span> Active Host Executions
+          </div>
+          <button class="btn btn-sm" onclick="window.switchTab('overview')">Refresh</button>
+        </div>
+        <div class="card-body" style="padding: 0; overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Execution ID</th>
+                <th>PID</th>
+                <th>Token</th>
+                <th>Peer IP</th>
+                <th>Command</th>
+                <th>Started</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="executionsTableBody">
+              <tr>
+                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                  No active processes running on host.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: Policy Manager & Drag-Drop Uploader -->
+    <section id="tab-policies" class="tab-pane">
+      <!-- Drag & Drop Upload Zone (ChatGPT-style photo/file drop) -->
+      <div class="dropzone-container" id="policyDropZone" onclick="document.getElementById('policyFileInput').click()">
+        <input type="file" id="policyFileInput" accept=".yaml,.yml" style="display: none;">
+        <div class="dropzone-icon">📥</div>
+        <div class="dropzone-title">Drop your policy .yaml file here, or click to browse</div>
+        <div class="dropzone-desc">Drag any policy directly from your computer into this window to upload to the server.</div>
+      </div>
+
+      <!-- Staged Policy Card (appears upon file drop) -->
+      <div id="stagedPolicyContainer" style="display: none; margin-bottom: 16px;"></div>
+
+      <!-- Active Loaded Policies Grid -->
+      <div style="margin-bottom: 16px;">
+        <h3 style="font-size: 13px; font-weight: 600; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px;">
+          Active Policies on Daemon
+        </h3>
+        <div id="policyCardsGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px;">
+          <!-- Loaded via policies.js -->
+        </div>
+      </div>
+
+      <!-- Visual & Code Policy Editor -->
+      <div class="card" id="policyEditorCard">
+        <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
+          <div class="card-title">
+            <span>📝</span>
+            <span id="editorFilePath" style="font-family: var(--font-mono); color: var(--color-blue);">Select a policy above to view or edit</span>
+            <span id="editorLinterBadge" class="badge badge-slate" style="display: none;"></span>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn btn-sm" id="editorExportBtn" style="display: none;" onclick="window.exportPolicyToPc()">📤 Export to PC</button>
+            <button class="btn btn-sm btn-danger" id="editorDeleteBtn" style="display: none;" onclick="window.deleteActivePolicy()">Delete</button>
+            <button class="btn btn-sm btn-success" id="editorSaveBtn" style="display: none;" onclick="window.saveEditorFile()">Save to Host</button>
+          </div>
+        </div>
+        <div class="card-body" style="padding: 0;">
+          <textarea id="policyEditorTextarea" oninput="window.lintEditorYaml()" spellcheck="false"
+                    style="width: 100%; height: 380px; background: #040608; color: #7ee787; border: none; font-family: var(--font-mono); font-size: 12px; padding: 14px; line-height: 1.6; resize: vertical; outline: none;"
+                    placeholder="Policy content will appear here..."></textarea>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: AI Policy Architect (LLM Chat) -->
+    <section id="tab-ai" class="tab-pane">
+      <div class="ai-layout">
+        <!-- Left: Quick Templates & Controls -->
+        <div class="ai-sidebar">
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-header">
+              <div class="card-title"><span>💡</span> Preset Prompts</div>
+            </div>
+            <div class="card-body" style="display: flex; flex-direction: column; gap: 8px;">
+              <button class="btn btn-sm" style="text-align: left; justify-content: flex-start;"
+                      onclick="document.getElementById('aiChatInput').value = 'Create a Docker operations policy that allows docker ps, docker logs, and docker restart webapp, but denies all rm, prune, and volume wipe commands.';">
+                🐳 Docker Ops Agent
+              </button>
+              <button class="btn btn-sm" style="text-align: left; justify-content: flex-start;"
+                      onclick="document.getElementById('aiChatInput').value = 'Create a Python web scraper policy that permits curl and running python3 in /tmp, but blocks all sudo, chmod, and systemctl commands.';">
+                🐍 Python Scraper Agent
+              </button>
+              <button class="btn btn-sm" style="text-align: left; justify-content: flex-start;"
+                      onclick="document.getElementById('aiChatInput').value = 'Create a strict read-only diagnostic policy allowing uptime, df -h, free -m, ps aux, and systemctl status, with zero write permissions.';">
+                🔍 Read-Only Diagnostics
+              </button>
+              <button class="btn btn-sm" style="text-align: left; justify-content: flex-start;"
+                      onclick="document.getElementById('aiChatInput').value = 'Create a CI/CD automation pipeline policy with a named action deploy that runs git pull and systemctl reload nginx, with arbitrary exec disabled.';">
+                🚀 CI/CD Action Pipeline
+              </button>
+            </div>
+          </div>
+
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-header">
+              <div class="card-title"><span>⚙️</span> Provider Status</div>
+            </div>
+            <div class="card-body">
+              <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+                Policies generated here can be copied or deployed to your daemon with 1 click.
+              </p>
+              <button class="btn btn-sm btn-primary" style="width: 100%;" onclick="window.openAiSettingsModal()">
+                Configure LLM API Key
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Conversational Chat Stream -->
+        <div class="ai-chat-area">
+          <div class="ai-messages" id="aiMessagesContainer">
+            <!-- Messages rendered via ai-assistant.js -->
+          </div>
+          <form class="ai-input-bar" id="aiChatForm">
+            <input type="text" id="aiChatInput" class="form-control" placeholder="Describe the agent permissions you need (e.g. 'Allow git and build tools in /srv/repo, block root access')..." required autocomplete="off">
+            <button type="submit" class="btn btn-primary" id="aiSendBtn">Send</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: Access Tokens -->
+    <section id="tab-tokens" class="tab-pane">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>🔑</span> Configured Agent Access Tokens
+          </div>
+          <button class="btn btn-sm btn-primary" onclick="window.openModal('createTokenModal')">+ Issue New Token</button>
+        </div>
+        <div class="card-body" style="padding: 0; overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Token Name</th>
+                <th>Policy</th>
+                <th>OS User</th>
+                <th>Tier</th>
+                <th>Created</th>
+                <th>Expires</th>
+                <th>Last Used</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="tokensTableBody">
+              <!-- Loaded via tokens.js -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: Audit & Telemetry -->
+    <section id="tab-audit" class="tab-pane">
+      <div class="terminal-window">
+        <div class="terminal-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="badge badge-green">LIVE SSE STREAM</span>
+            <span style="color: var(--text-secondary); font-size: 11px;">Real-Time Command Telemetry</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <select id="logFilterSelect" class="form-control" style="width: auto; padding: 2px 6px; font-size: 11px;">
+              <option value="all">Filter: All Events</option>
+              <option value="allowed">Allowed Only</option>
+              <option value="denied">Denied Only</option>
+              <option value="blocked">Blocked Injection Only</option>
+            </select>
+            <input type="text" id="logSearchInput" class="form-control" placeholder="Search command / token..." style="width: 160px; padding: 2px 6px; font-size: 11px;">
+            <button class="btn btn-sm" onclick="document.getElementById('terminalStream').innerHTML = '';">Clear</button>
+          </div>
+        </div>
+        <div class="terminal-stream" id="terminalStream">
+          <div class="log-row" style="color: var(--text-muted);">
+            Connecting to host daemon telemetry stream...
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 6: Direct Dispatch Console -->
+    <section id="tab-console" class="tab-pane">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span>💻</span> Direct Command Dispatcher</div>
+        </div>
+        <div class="card-body">
+          <div class="form-group">
+            <label class="form-label">Command to execute on host</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="consoleCmdInput" class="form-control" placeholder="e.g. uptime or df -h">
+              <button class="btn btn-primary" onclick="window.runConsoleCmd()">Execute</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Working Directory (optional)</label>
+            <input type="text" id="consoleCwdInput" class="form-control" placeholder="e.g. /var/log">
+          </div>
+          <div style="margin-top: 14px;">
+            <label class="form-label">Execution Result</label>
+            <pre id="consoleOutput" style="background: #040608; border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 12px; font-family: var(--font-mono); font-size: 12px; min-height: 220px; max-height: 500px; overflow-y: auto; color: #fff; white-space: pre-wrap; word-break: break-all;">Awaiting command execution...</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- --- MODALS --- -->
+
+  <!-- Connection & Profile Modal -->
+  <div class="modal-backdrop" id="connectionModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">🔗 Connect to AgentGate Daemon</div>
+        <button class="btn btn-sm" onclick="window.closeModal('connectionModal')">✕</button>
+      </div>
+      <form id="connectionForm">
+        <div class="modal-body">
+          <p style="color: var(--text-secondary); font-size: 12px; margin-bottom: 12px;">
+            Enter your remote or local AgentGate daemon host URL and an admin bearer token.
+          </p>
+          <div class="form-group">
+            <label class="form-label">Daemon Host URL</label>
+            <input type="text" id="connHostInput" class="form-control" placeholder="http://127.0.0.1:7991 or https://192.168.1.150:7991" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Dashboard Admin Token</label>
+            <input type="password" id="connTokenInput" class="form-control" placeholder="ag_..." required>
+            <small style="color: var(--text-muted); font-size: 10px;">
+              Generate on server using: <code>agentgated dashboard-token</code>
+            </small>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn" onclick="window.closeModal('connectionModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Connect to Host</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Create Token Modal -->
+  <div class="modal-backdrop" id="createTokenModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">🔑 Issue New Agent Token</div>
+        <button class="btn btn-sm" onclick="window.closeModal('createTokenModal')">✕</button>
+      </div>
+      <form id="createTokenForm">
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Token Name</label>
+            <input type="text" id="newTokenName" class="form-control" placeholder="e.g. claude-code or docker-ops" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Assigned Policy</label>
+            <select id="newTokenPolicy" class="form-control">
+              <option value="standard">standard</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Security Tier</label>
+            <select id="newTokenTier" class="form-control">
+              <option value="none">Standard (No Sudoers Grants)</option>
+              <option value="read">Read-Only Diagnostics</option>
+              <option value="ops">Operational (Narrow Sudoers)</option>
+              <option value="admin">Administrator (Max 24h)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Isolated OS User (Optional)</label>
+            <input type="text" id="newTokenOsUser" class="form-control" placeholder="e.g. ag-agent (drops privileges to this system user)">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Expiration</label>
+            <select id="newTokenExpiry" class="form-control">
+              <option value="0">Never Expires</option>
+              <option value="1">1 Day</option>
+              <option value="7" selected>7 Days</option>
+              <option value="30">30 Days</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn" onclick="window.closeModal('createTokenModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Generate Token</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Token Result Modal -->
+  <div class="modal-backdrop" id="tokenResultModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" style="color: var(--color-green);">✓ Token Created Successfully</div>
+        <button class="btn btn-sm" onclick="window.closeModal('tokenResultModal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--text-secondary); font-size: 12px; margin-bottom: 10px;">
+          Copy this token now. For security, it is hashed on the server and cannot be viewed again.
+        </p>
+        <pre id="generatedTokenDisplay" style="background: #040608; border: 1px solid var(--border-default); padding: 10px; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 12px; word-break: break-all; color: var(--color-blue); margin-bottom: 10px;"></pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="window.copyGeneratedToken()">Copy Token</button>
+        <button class="btn" onclick="window.closeModal('tokenResultModal')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Settings Modal -->
+  <div class="modal-backdrop" id="aiSettingsModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">🤖 AI Policy Architect Settings</div>
+        <button class="btn btn-sm" onclick="window.closeModal('aiSettingsModal')">✕</button>
+      </div>
+      <form id="aiSettingsForm">
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">LLM Provider</label>
+            <select id="aiProviderSelect" class="form-control">
+              <option value="openai">OpenAI (ChatGPT)</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="groq">Groq (Ultra-fast Llama 3.3)</option>
+              <option value="ollama">Local Ollama / Custom API</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">API Key</label>
+            <input type="password" id="aiApiKeyInput" class="form-control" placeholder="sk-..." autocomplete="off">
+            <small style="color: var(--text-muted); font-size: 10px;">Stored only in your local browser storage. Never transmitted to third parties.</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Model Name</label>
+            <input type="text" id="aiModelInput" class="form-control" placeholder="e.g. gpt-4o-mini, claude-3-5-sonnet, gemini-2.0-flash">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Endpoint URL (for Ollama / Custom)</label>
+            <input type="text" id="aiEndpointInput" class="form-control" placeholder="http://localhost:11434/v1">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn" onclick="window.closeModal('aiSettingsModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Notification Center -->
+  <div id="toastContainer"></div>
+
+  <!-- Script Initializer -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

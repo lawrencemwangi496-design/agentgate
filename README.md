@@ -71,10 +71,11 @@ AgentGate consists of two binaries and an optional standalone control console:
    - CLI execution client (`agentgate exec <command>`) for scripts and CI/CD pipelines.
    - Model Context Protocol (MCP) server for integrating with Claude Desktop, Cursor, or custom agent runners.
 
-3. **Web Control Console** (`console.html`)
-   - Standalone single-page interface for remote monitoring and administration.
-   - Authenticates via RFC 6238 TOTP (compatible with standard mobile/desktop authenticator apps).
-   - Features client-side policy editing, real-time schema validation, local PC import/export, and daemon restart signaling.
+3. **Standalone Detached Dashboard** (Web Control Plane & AI Architect)
+   - Optional, completely detached web dashboard packaged as a lightweight container (`ghcr.io/lawrencemwangi496-design/agentgate-dashboard:latest`).
+   - Run locally on your laptop or on any server with Docker/Podman: `docker run -d -p 3000:3000 ghcr.io/lawrencemwangi496-design/agentgate-dashboard:latest`.
+   - Connects to any remote daemon using an admin token generated via `agentgated dashboard-token`.
+   - Features drag-and-drop policy upload directly from your PC, real-time live telemetry, and an integrated multi-provider AI Policy Architect (OpenAI, Gemini, Anthropic, Groq, Ollama).
 
 ---
 
@@ -125,25 +126,29 @@ Alternatively, run the daemon manually:
 sudo agentgated --listen 127.0.0.1:7991
 ```
 
-### 2. Configure TOTP for Dashboard Access
+### 2. Access the Detached Control Dashboard (Docker)
 
-To access the web console, generate a two-factor authentication secret:
+To launch the standalone web control dashboard:
 
-```bash
-sudo agentgated totp setup
-```
+1. **Generate a dashboard access token on the host machine:**
+   ```bash
+   sudo agentgated dashboard-token
+   ```
+   This prints the host URL and a dedicated admin access token (`ag_...`).
 
-This outputs a Base32 secret key and an `otpauth://` URI. Add this key to your authenticator app (Google Authenticator, 1Password, Bitwarden, or Aegis).
+2. **Launch the dashboard container:**
+   ```bash
+   docker run -d -p 3000:3000 ghcr.io/lawrencemwangi496-design/agentgate-dashboard:latest
+   ```
+   *(Or using Docker Compose: `docker compose up -d`)*
 
-To check status or regenerate keys:
+3. **Open the Dashboard in your browser:**
+   Navigate to `http://localhost:3000` (or `http://<server-ip>:3000`), enter your daemon host URL and the dashboard token, and connect.
 
-```bash
-# Check configuration status
-agentgated totp status
-
-# Regenerate secret (invalidates previous keys)
-sudo agentgated totp setup --reset
-```
+   **Dashboard Capabilities:**
+   - **PC Drag-and-Drop Policy Upload**: Drag any `.yaml` policy file directly from your computer into the browser window to instantly inspect, validate, and upload it to the remote daemon.
+   - **AI Policy Architect (LLM Chat)**: Describe the permissions you need in natural language. The built-in assistant generates validated AgentGate policies with 1-click deployment to your daemon (supports OpenAI, Gemini, Claude, Groq, and Ollama).
+   - **Live Telemetry & Process Killer**: Real-time SSE stream of every command execution, latency, exit code, and active processes with termination controls.
 
 ### 3. Issue Scoped Agent Tokens
 
@@ -294,6 +299,9 @@ agentgate exec --json systemctl status nginx
 | `agentgated` | Run the daemon process in foreground |
 | `--listen <addr>` | Specify interface and port binding (default: `127.0.0.1:7991`) |
 | `--config <path>` | Path to custom configuration file |
+| `agentgated dashboard-token` | Generate a dashboard access token & connection instructions |
+| `agentgated lockdown` | Activate Emergency Lockdown (freeze all executions) |
+| `agentgated audit` | View recent command execution logs |
 | `agentgated totp setup` | Generate or display the RFC 6238 TOTP 2FA secret |
 | `agentgated totp setup --reset` | Overwrite and generate a new TOTP 2FA secret |
 | `agentgated totp status` | Check if TOTP authentication is active |

@@ -44,6 +44,10 @@ pub enum DaemonCommands {
     /// Manage TOTP 2FA secret for dashboard authentication
     Totp(TotpCommand),
 
+    /// Generate a dashboard access token and print connection instructions
+    #[command(name = "dashboard-token", alias = "dashboard")]
+    DashboardToken(cli::DashboardTokenArgs),
+
     /// Activate Emergency Lockdown (instantly freeze all agent executions)
     Lockdown,
 
@@ -156,6 +160,9 @@ async fn main() -> Result<()> {
         }
         Some(DaemonCommands::Totp(cmd)) => {
             cli::handle_totp(cmd.command, &config)?;
+        }
+        Some(DaemonCommands::DashboardToken(args)) => {
+            cli::handle_dashboard_token(args, &config)?;
         }
         Some(DaemonCommands::Audit(args)) => {
             cli::handle_logs(args, &config)?;

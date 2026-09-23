@@ -1,0 +1,15 @@
+services:
+  dashboard:
+    image: ghcr.io/lawrencemwangi496-design/agentgate-dashboard:latest
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: agentgate-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3

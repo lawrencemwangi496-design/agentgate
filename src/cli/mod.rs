@@ -359,6 +359,17 @@ pub enum TotpSubcommand {
     Status,
 }
 
+#[derive(Args, Clone, Debug, Default)]
+pub struct DashboardTokenArgs {
+    /// Token lifetime (e.g. 24h, 7d, 30d, default: 24h)
+    #[arg(long, default_value = "24h")]
+    pub expires: String,
+
+    /// Custom token name identifier
+    #[arg(long, default_value = "dashboard-admin")]
+    pub name: String,
+}
+
 #[derive(Args, Clone, Default)]
 pub struct LogsArgs {
     /// Maximum number of recent entries to show
@@ -1420,6 +1431,38 @@ pub fn handle_totp(cmd: Option<TotpSubcommand>, config: &AgentGateConfig) -> Res
             println!("  3. Use the 6-digit code to log into the web dashboard\n");
         }
     }
+    Ok(())
+}
+
+pub fn handle_dashboard_token(args: DashboardTokenArgs, config: &AgentGateConfig) -> Result<()> {
+    let mut store = TokenStore::load(&config.tokens_file)?;
+    let duration = parse_duration(&args.expires)?.unwrap_or_else(|| chrono::Duration::hours(24));
+    let raw_token = store.create(
+        &args.name,
+        "standard",
+        Some(duration),
+        None,
+        Some("admin".to_string()),
+        None,
+    )?;
+
+    let has_tls = config.certs_dir.join("cert.pem").exists() && config.certs_dir.join("key.pem").exists();
+    let proto = if has_tls { "https" } else { "http" };
+    let host = format!("{}://{}:{}", proto, config.listen_addr, config.listen_port);
+
+    println!("\n==========================================================");
+    println!("             🚪 AgentGate Dashboard Access");
+    println!("==========================================================");
+    println!("  Daemon Host URL:  {}", host);
+    println!("  Dashboard Token:  {}", raw_token);
+    println!("  Expires in:       {}", args.expires);
+    println!();
+    println!("  Docker Run (Standalone Dashboard Container):");
+    println!("    docker run -d -p 3000:3000 ghcr.io/lawrencemwangi496-design/agentgate-dashboard:latest");
+    println!();
+    println!("  Then open http://localhost:3000 in your browser and connect using the credentials above.");
+    println!("==========================================================\n");
+
     Ok(())
 }
 

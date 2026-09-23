@@ -1,0 +1,12 @@
+{
+  "name": "agentgate-dashboard",
+  "version": "0.1.9",
+  "description": "Standalone detached control dashboard and AI policy architect for AgentGate",
+  "scripts": {
+    "start": "npx serve -l 3000 .",
+    "dev": "npx serve -l 3000 ."
+  },
+  "keywords": ["agentgate", "dashboard", "ai-agents", "security", "control-plane"],
+  "author": "Lawrence Mwangi",
+  "license": "MIT"
+}

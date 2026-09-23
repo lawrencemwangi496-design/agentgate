@@ -146,6 +146,7 @@ pub fn create_router(config: &AgentGateConfig, state: AppState) -> Router {
                 .allow_methods([
                     axum::http::Method::GET,
                     axum::http::Method::POST,
+                    axum::http::Method::PUT,
                     axum::http::Method::DELETE,
                     axum::http::Method::OPTIONS,
                 ])
@@ -167,6 +168,7 @@ pub fn create_router(config: &AgentGateConfig, state: AppState) -> Router {
                 .allow_methods([
                     axum::http::Method::GET,
                     axum::http::Method::POST,
+                    axum::http::Method::PUT,
                     axum::http::Method::DELETE,
                     axum::http::Method::OPTIONS,
                 ])
